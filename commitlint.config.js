@@ -49,6 +49,7 @@ export default {
         'mux-audio',
         'mux-data',
         'mux-video',
+        'openmoq-video',
         'shaka-video',
         'vimeo-video',
         'wistia-video',

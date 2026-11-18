@@ -29,6 +29,7 @@
         "@videojs/mux-data",
         "@videojs/mux-video",
         "@videojs/native-hls-video",
+        "@videojs/openmoq-video",
         "@videojs/playerjs-video",
         "@videojs/react",
         "@videojs/react-native",
@@ -103,6 +104,9 @@
     },
     "packages/adapters/native-hls-video": {
       "component": "@videojs/native-hls-video"
+    },
+    "packages/adapters/openmoq-video": {
+      "component": "@videojs/openmoq-video"
     },
     "packages/react": {
       "component": "@videojs/react"
