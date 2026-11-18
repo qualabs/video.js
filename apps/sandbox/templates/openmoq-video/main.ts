@@ -4,7 +4,7 @@
 // Query params prefill the form, and `ns` connects at once:
 //   url=<relay URL>   Defaults to https://127.0.0.1:4433/moq.
 //   ns=<namespace>    Defaults to `demo`, the namespace node-relay serves.
-//   v=<draft>         MOQT draft version. Defaults to 18, which node-relay needs.
+//   v=<draft>         MOQT draft version: 14, 16, 18 or 22. Defaults to 18, which node-relay needs.
 //   hash=<hex>        SHA-256 of a self-signed relay certificate, as printed by node-relay's `gen-cert`.
 import '@app/styles.css';
 import '@videojs/html/video/player';
@@ -14,6 +14,8 @@ import '@videojs/html/media/openmoq-video';
 import type { OpenMoqSource } from '@videojs/html/media/openmoq-video';
 
 const DEFAULTS = { url: 'https://127.0.0.1:4433/moq', ns: 'demo', v: '18', hash: '' };
+// The drafts playa speaks, as listed in the form's `<select>`.
+const DRAFTS: readonly string[] = ['14', '16', '18', '22'] satisfies `${NonNullable<OpenMoqSource['draftVersion']>}`[];
 
 type Field = keyof typeof DEFAULTS;
 
@@ -38,6 +40,7 @@ function connect(): void {
   media.source = {
     url: field('url').value.trim(),
     namespace: field('ns').value.trim(),
+    // SAFETY: the `<select>` only offers the drafts in `DRAFTS`, and an unsupported `?v=` falls back to the default.
     draftVersion: Number(field('v').value) as NonNullable<OpenMoqSource['draftVersion']>,
     ...(hash && { certHash: hexToBuffer(hash) }),
   };
@@ -47,7 +50,13 @@ for (const name of Object.keys(DEFAULTS) as Field[]) {
   field(name).value = params.get(name) ?? DEFAULTS[name];
 }
 
-for (const type of ['emptied', 'loadstart', 'loadedmetadata', 'play', 'playing', 'pause']) {
+// A `<select>` set to an unknown value selects nothing and would connect with draft 0.
+if (!DRAFTS.includes(field('v').value)) {
+  console.warn(`Unsupported draft "${params.get('v')}", using ${DEFAULTS.v}.`);
+  field('v').value = DEFAULTS.v;
+}
+
+for (const type of ['emptied', 'loadstart', 'loadedmetadata', 'play', 'playing', 'pause', 'ended', 'error']) {
   media.addEventListener(type, () => {
     status.textContent = type;
   });

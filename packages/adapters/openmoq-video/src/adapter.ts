@@ -1,5 +1,12 @@
-import { type Level, Player, type PlayerOptions } from '@openmoq/playa';
-import { MediaReadyState, type MediaReadyStateValue, type Video } from '@videojs/media';
+import { type Level, Player, type PlayerOptions, type PlayerState } from '@openmoq/playa';
+import {
+  MediaError,
+  MediaReadyState,
+  type MediaReadyStateValue,
+  type MediaStreamType,
+  MediaStreamTypes,
+  type Video,
+} from '@videojs/media';
 import { noop } from '@videojs/utils/function';
 import { isUndefined } from '@videojs/utils/predicate';
 
@@ -32,6 +39,10 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #unsubscribes: (() => void)[] = [];
   #source: OpenMoqSource | null = OpenMoqAdapter.defaultProps.source;
   #readyState: MediaReadyStateValue = MediaReadyState.HAVE_NOTHING;
+  #playerState: PlayerState | null = null;
+  #error: MediaError | null = null;
+  // Last `play()`/`pause()` call, so a `pause()` while `load()` is in flight wins over an earlier `play()`.
+  #wantsPlay = false;
   // Guards async player creation across source changes and attach/detach cycles.
   #generation = 0;
   #loading: Promise<void> = Promise.resolve();
@@ -42,9 +53,21 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return this.#player;
   }
 
-  /** Bind the `<video>` and the `<canvas>` the host renders beside it; playa draws into whichever the catalog needs. */
+  get target(): HTMLVideoElement | null {
+    return this.#video;
+  }
+
+  /**
+   * Bind the `<video>` and the `<canvas>` the host renders beside it; playa draws into whichever the catalog needs.
+   * Passing `null` detaches.
+   */
   attach(target: HTMLVideoElement | null): void {
-    if (!target || this.#video === target) return;
+    if (!target) {
+      this.detach();
+      return;
+    }
+
+    if (this.#video === target) return;
 
     if (this.#video) this.detach();
 
@@ -102,23 +125,36 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   }
 
   get ended(): boolean {
-    return false;
+    return this.#playerState === 'ended';
   }
 
   get seeking(): boolean {
     return false;
   }
 
+  /** Every OpenMoQ broadcast is live; the type is known once the catalog loads. */
+  get streamType(): MediaStreamType {
+    return this.#readyState >= MediaReadyState.HAVE_METADATA ? MediaStreamTypes.LIVE : MediaStreamTypes.UNKNOWN;
+  }
+
+  get error(): MediaError | null {
+    return this.#error;
+  }
+
   async play(): Promise<void> {
+    this.#wantsPlay = true;
+
     await this.#loading;
 
     const player = this.#player;
-    if (!player || player.state === 'playing') return;
+    if (!this.#wantsPlay || !player || player.state === 'playing' || player.state === 'error') return;
 
     player.play();
   }
 
   pause(): void {
+    this.#wantsPlay = false;
+
     // Playa throws when pausing from any state but `playing`.
     if (this.#player?.state === 'playing') this.#player.pause();
   }
@@ -141,13 +177,20 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   }
 
   #reload(): void {
-    this.#loading = this.#rebuild().catch((error: unknown) => {
+    const generation = ++this.#generation;
+
+    this.#loading = this.#rebuild(generation).catch((error: unknown) => {
+      if (generation !== this.#generation) return;
+
       if (__DEV__) console.warn('[openmoq-video] Failed to load the source.', error);
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.#fail(new MediaError(message, MediaError.MEDIA_ERR_NETWORK, true));
     });
   }
 
-  async #rebuild(): Promise<void> {
-    const generation = ++this.#generation;
+  async #rebuild(generation: number): Promise<void> {
     const replaced = !!this.#player;
 
     this.#release();
@@ -173,7 +216,11 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
       player.on('playing', () => this.#onPlaying()),
       player.on('timeupdate', () => this.dispatchEvent(new Event('timeupdate'))),
       player.on('durationchange', () => this.dispatchEvent(new Event('durationchange'))),
+      player.on('statechange', ({ state }) => this.#onStateChange(state)),
+      player.on('ended', () => this.dispatchEvent(new Event('ended'))),
+      player.on('error', ({ severity, code, message }) => this.#onError(severity, code, message)),
     ];
+    this.#playerState = player.state;
     this.dispatchEvent(new Event('loadstart'));
 
     await player.load();
@@ -181,14 +228,26 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
   #release(): void {
     const player = this.#player;
+    const streamTypeKnown = this.streamType !== MediaStreamTypes.UNKNOWN;
 
     for (const unsubscribe of this.#unsubscribes) unsubscribe();
 
     this.#unsubscribes = [];
     this.#player = null;
+    this.#playerState = null;
     this.#readyState = MediaReadyState.HAVE_NOTHING;
+    this.#error = null;
 
     if (player) this.#teardown = player.destroy().catch(noop);
+
+    if (streamTypeKnown) this.dispatchEvent(new Event('streamtypechange'));
+  }
+
+  #fail(error: MediaError): void {
+    if (this.#error) return;
+
+    this.#error = error;
+    this.dispatchEvent(new Event('error'));
   }
 
   #onReady(player: Player, video: HTMLVideoElement, canvas: HTMLCanvasElement): void {
@@ -203,6 +262,26 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.#readyState = MediaReadyState.HAVE_METADATA;
     this.dispatchEvent(new Event('loadedmetadata'));
     this.dispatchEvent(new Event('durationchange'));
+    this.dispatchEvent(new Event('streamtypechange'));
+  }
+
+  // Playa reaches `ended` straight from `playing` without a `pause`, which a media element fires before `ended`.
+  #onStateChange(state: PlayerState): void {
+    const previous = this.#playerState;
+
+    this.#playerState = state;
+
+    if (state === 'ended' && previous === 'playing') this.dispatchEvent(new Event('pause'));
+  }
+
+  // Only a fatal error stops playback; playa keeps going after a recoverable one.
+  #onError(severity: 'fatal' | 'recoverable', code: number, message: string): void {
+    if (severity !== 'fatal') return;
+
+    const error = new MediaError(message, MediaError.MEDIA_ERR_CUSTOM, true);
+
+    error.data = { playaErrorCode: code };
+    this.#fail(error);
   }
 
   #onPlay(): void {
