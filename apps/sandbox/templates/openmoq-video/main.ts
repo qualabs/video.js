@@ -4,7 +4,7 @@
 // Query params prefill the form, and `ns` connects at once:
 //   url=<relay URL>   Defaults to https://127.0.0.1:4433/moq.
 //   ns=<namespace>    Defaults to `demo`, the namespace node-relay serves.
-//   v=<draft>         MOQT draft version: 14, 16, 18 or 22. Defaults to 18, which node-relay needs.
+//   v=<draft>         MOQT draft version. Defaults to 18, which node-relay needs.
 //   hash=<hex>        SHA-256 of a self-signed relay certificate, as printed by node-relay's `gen-cert`.
 import '@app/styles.css';
 import '@videojs/html/video/player';
@@ -14,9 +14,9 @@ import '@videojs/html/media/openmoq-video';
 import type { OpenMoqSource } from '@videojs/html/media/openmoq-video';
 
 const DEFAULTS = { url: 'https://127.0.0.1:4433/moq', ns: 'demo', v: '18', hash: '' };
-// The drafts playa speaks, as listed in the form's `<select>`.
-const DRAFTS: readonly string[] = ['14', '16', '18', '22'] satisfies `${NonNullable<OpenMoqSource['draftVersion']>}`[];
+const DRAFTS: readonly Draft[] = [14, 16, 18, 22];
 
+type Draft = NonNullable<OpenMoqSource['draftVersion']>;
 type Field = keyof typeof DEFAULTS;
 
 const form = document.querySelector<HTMLFormElement>('#connect')!;
@@ -34,14 +34,18 @@ function hexToBuffer(hex: string): ArrayBuffer {
   return new Uint8Array(bytes.map((byte) => Number.parseInt(byte, 16))).buffer;
 }
 
+function findDraft(value: string): Draft | undefined {
+  return DRAFTS.find((draft) => `${draft}` === value);
+}
+
 function connect(): void {
   const hash = field('hash').value.trim();
+  const draftVersion = findDraft(field('v').value);
 
   media.source = {
     url: field('url').value.trim(),
     namespace: field('ns').value.trim(),
-    // SAFETY: the `<select>` only offers the drafts in `DRAFTS`, and an unsupported `?v=` falls back to the default.
-    draftVersion: Number(field('v').value) as NonNullable<OpenMoqSource['draftVersion']>,
+    ...(draftVersion && { draftVersion }),
     ...(hash && { certHash: hexToBuffer(hash) }),
   };
 }
@@ -50,8 +54,7 @@ for (const name of Object.keys(DEFAULTS) as Field[]) {
   field(name).value = params.get(name) ?? DEFAULTS[name];
 }
 
-// A `<select>` set to an unknown value selects nothing and would connect with draft 0.
-if (!DRAFTS.includes(field('v').value)) {
+if (!findDraft(field('v').value)) {
   console.warn(`Unsupported draft "${params.get('v')}", using ${DEFAULTS.v}.`);
   field('v').value = DEFAULTS.v;
 }

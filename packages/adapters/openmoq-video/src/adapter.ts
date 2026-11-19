@@ -57,10 +57,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return this.#video;
   }
 
-  /**
-   * Bind the `<video>` and the `<canvas>` the host renders beside it; playa draws into whichever the catalog needs.
-   * Passing `null` detaches.
-   */
+  /** Bind the `<video>` and the `<canvas>` the host renders beside it; playa draws into whichever the catalog needs. */
   attach(target: HTMLVideoElement | null): void {
     if (!target) {
       this.detach();
@@ -132,7 +129,6 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return false;
   }
 
-  /** Every OpenMoQ broadcast is live; the type is known once the catalog loads. */
   get streamType(): MediaStreamType {
     return this.#readyState >= MediaReadyState.HAVE_METADATA ? MediaStreamTypes.LIVE : MediaStreamTypes.UNKNOWN;
   }
