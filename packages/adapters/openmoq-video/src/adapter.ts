@@ -175,12 +175,12 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #reload(): void {
     const generation = ++this.#generation;
 
-    this.#loading = this.#rebuild(generation).catch((error: unknown) => {
+    this.#loading = this.#rebuild(generation).catch((cause) => {
       if (generation !== this.#generation) return;
 
-      if (__DEV__) console.warn('[openmoq-video] Failed to load the source.', error);
+      if (__DEV__) console.warn('[openmoq-video] Failed to load the source.', cause);
 
-      const message = error instanceof Error ? error.message : String(error);
+      const message = cause instanceof Error ? cause.message : String(cause);
 
       this.#fail(new MediaError(message, MediaError.MEDIA_ERR_NETWORK, true));
     });

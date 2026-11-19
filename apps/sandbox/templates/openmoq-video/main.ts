@@ -17,15 +17,14 @@ const DEFAULTS = { url: 'https://127.0.0.1:4433/moq', ns: 'demo', v: '18', hash:
 const DRAFTS: readonly Draft[] = [14, 16, 18, 22];
 
 type Draft = NonNullable<OpenMoqSource['draftVersion']>;
-type Field = keyof typeof DEFAULTS;
 
 const form = document.querySelector<HTMLFormElement>('#connect')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const media = document.querySelector('openmoq-video')!;
 const params = new URLSearchParams(location.search);
 
-function field(name: Field): HTMLInputElement | HTMLSelectElement {
-  return form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement;
+function field(name: string): HTMLInputElement | HTMLSelectElement {
+  return form.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)!;
 }
 
 function hexToBuffer(hex: string): ArrayBuffer {
@@ -50,8 +49,8 @@ function connect(): void {
   };
 }
 
-for (const name of Object.keys(DEFAULTS) as Field[]) {
-  field(name).value = params.get(name) ?? DEFAULTS[name];
+for (const [name, fallback] of Object.entries(DEFAULTS)) {
+  field(name).value = params.get(name) ?? fallback;
 }
 
 if (!findDraft(field('v').value)) {
