@@ -35,6 +35,8 @@
   },
   "scripts": {
     "dev": "vp pack --watch ./src --no-clean",
+    "test": "vp test run",
+    "test:watch": "vp test",
     "clean": "rimraf --glob dist types '*.tsbuildinfo'"
   },
   "dependencies": {
@@ -43,6 +45,7 @@
     "@videojs/utils": "workspace:*"
   },
   "devDependencies": {
+    "jsdom": "^27.0.0",
     "vite-plus": "catalog:"
   }
 }
