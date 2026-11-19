@@ -144,6 +144,7 @@ jobs:
           './packages/adapters/mux-audio'
           './packages/extensions/mux-data'
           './packages/adapters/mux-video'
+          './packages/adapters/openmoq-video'
           './packages/adapters/shaka-video'
           './packages/adapters/vimeo-video'
           './packages/adapters/wistia-video'
