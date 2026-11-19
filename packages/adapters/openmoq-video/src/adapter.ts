@@ -143,7 +143,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     await this.#loading;
 
     const player = this.#player;
-    if (!this.#wantsPlay || !player || player.state === 'playing' || player.state === 'error') return;
+    if (!this.#wantsPlay || (player?.state !== 'loading' && player?.state !== 'paused')) return;
 
     player.play();
   }
@@ -254,6 +254,8 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     canvas.hidden = !onCanvas;
 
     if (level) sizeCanvas(canvas, level);
+
+    if (this.#readyState >= MediaReadyState.HAVE_METADATA) return;
 
     this.#readyState = MediaReadyState.HAVE_METADATA;
     this.dispatchEvent(new Event('loadedmetadata'));
