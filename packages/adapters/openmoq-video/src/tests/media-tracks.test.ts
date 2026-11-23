@@ -136,7 +136,33 @@ describe('OpenMoqMediaTracksMixin', () => {
     expect(player.setQuality).toHaveBeenLastCalledWith('auto');
   });
 
-  it('marks the level Playa adopts once the first frame is rendered, and follows qualitychange', async () => {
+  it('ignores a switch that playa rejects, with a warning', async () => {
+    const media = new OpenMoqMediaTracks();
+    const player = load(media);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cause = new Error('track unavailable');
+
+    player.setQuality.mockRejectedValueOnce(cause);
+    player.loadLevels(LEVELS);
+    media.videoRenditions.selectedIndex = 1;
+    await flush();
+    await flush();
+
+    expect(warn).toHaveBeenCalledWith('[openmoq-video] Failed to switch the video rendition.', cause);
+
+    warn.mockRestore();
+  });
+
+  it('does not switch before playa has levels', () => {
+    const media = new OpenMoqMediaTracks();
+    const player = load(media);
+
+    media.videoRenditions.dispatchEvent(new Event('change'));
+
+    expect(player.setQuality).not.toHaveBeenCalled();
+  });
+
+  it('marks the level playa adopts once the first frame is rendered, and follows qualitychange', async () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
     const onActiveChange = vi.fn();
@@ -173,6 +199,7 @@ describe('OpenMoqMediaTracksMixin', () => {
     ['loadstart', load],
     ['emptied', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.dispatchEvent(new Event('emptied'))],
     ['detach', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.detach()],
+    ['destroy', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.destroy()],
   ])('clears the list and stops listening to the previous Player on %s', (_type, replace) => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
