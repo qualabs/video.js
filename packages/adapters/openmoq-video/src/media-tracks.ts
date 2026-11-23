@@ -149,6 +149,6 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
 function levelsKey(levels: readonly Level[]): string {
   return levels
-    .map((level) => `${level.trackName}|${level.width}x${level.height}|${level.codec}|${level.bitrate}`)
+    .map((level) => `${level.id ?? level.trackName}|${level.width}x${level.height}|${level.codec}|${level.bitrate}`)
     .join();
 }
