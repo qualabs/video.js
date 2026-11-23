@@ -195,6 +195,21 @@ describe('OpenMoqMediaTracksMixin', () => {
     expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, true, false]);
   });
 
+  it('re-reads levels that changed without an announcement before marking the active one', () => {
+    const media = new OpenMoqMediaTracks();
+    const player = load(media);
+    const reordered = [LEVELS[1]!, LEVELS[0]!].map((level, index) => ({ ...level, index }));
+
+    player.loadLevels(LEVELS);
+    player.levels = reordered;
+    player.emit('qualitychange', { level: reordered[1]!, auto: true });
+
+    expect([...media.videoRenditions].map(({ height, active }) => ({ height, active }))).toEqual([
+      { height: 720, active: false },
+      { height: 1080, active: true },
+    ]);
+  });
+
   it.each([
     ['loadstart', load],
     ['emptied', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.dispatchEvent(new Event('emptied'))],

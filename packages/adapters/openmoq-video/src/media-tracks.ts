@@ -61,9 +61,16 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
       this.#unsubscribes = [
         engine.on('levelsloaded', ({ levels }) => this.#mirrorLevels(levels)),
-        engine.on('qualitychange', ({ level }) => this.#setActiveRendition(level.index)),
+        engine.on('qualitychange', ({ level }) => this.#onQualityChange(engine, level)),
       ];
     };
+
+    // Playa replaces its levels on `catalog_updated` and `selection_changed` without announcing them, so the level
+    // indexes are re-read before one of them is marked.
+    #onQualityChange(engine: Player, level: Level) {
+      this.#mirrorLevels(engine.levels);
+      this.#setActiveRendition(level.index);
+    }
 
     // Playa announces its levels only after `ready`, where the host already announced `loadedmetadata`.
     #onLoadedMetadata = () => {
