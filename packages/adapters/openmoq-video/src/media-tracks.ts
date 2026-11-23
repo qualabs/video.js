@@ -32,6 +32,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
       this.addEventListener('loadstart', this.#onLoadStart);
       this.addEventListener('loadedmetadata', this.#onLoadedMetadata);
+      this.addEventListener('loadeddata', this.#seedActiveRendition);
       this.addEventListener('emptied', this.#reset);
       this.videoRenditions.addEventListener('change', this.#switchRendition);
     }
@@ -45,6 +46,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     destroy() {
       this.removeEventListener('loadstart', this.#onLoadStart);
       this.removeEventListener('loadedmetadata', this.#onLoadedMetadata);
+      this.removeEventListener('loadeddata', this.#seedActiveRendition);
       this.removeEventListener('emptied', this.#reset);
       this.videoRenditions.removeEventListener('change', this.#switchRendition);
 
@@ -72,10 +74,16 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
     #mirrorLevels(levels: readonly Level[]) {
       const key = levelsKey(levels);
-      if (key === this.#levelsKey) return;
 
-      this.#levelsKey = key;
+      if (key !== this.#levelsKey) {
+        this.#levelsKey = key;
+        this.#replaceRenditions(levels);
+      }
 
+      this.#seedActiveRendition();
+    }
+
+    #replaceRenditions(levels: readonly Level[]) {
       this.#removeVideoTracks();
 
       const videoTrack = this.addVideoTrack('main');
@@ -96,9 +104,13 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
         rendition.id = `${level.index}`;
       }
-
-      this.#setActiveRendition(this.engine?.currentLevel ?? -1);
     }
+
+    // Playa adopts the first level after announcing the levels, and reports that adoption with no event of its own,
+    // so the level playing is read back once the first frame is rendered.
+    #seedActiveRendition = () => {
+      this.#setActiveRendition(this.engine?.currentLevel ?? -1);
+    };
 
     #switchRendition = () => {
       const { engine } = this;

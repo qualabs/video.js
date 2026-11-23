@@ -136,14 +136,18 @@ describe('OpenMoqMediaTracksMixin', () => {
     expect(player.setQuality).toHaveBeenLastCalledWith('auto');
   });
 
-  it('marks the level playing when listed as active, and follows qualitychange', async () => {
+  it('marks the level Playa adopts once the first frame is rendered, and follows qualitychange', async () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
     const onActiveChange = vi.fn();
 
     media.videoRenditions.addEventListener('activechange', onActiveChange);
-    player.currentLevel = 1;
     player.loadLevels(LEVELS);
+
+    expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, false, false]);
+
+    player.currentLevel = 1;
+    media.dispatchEvent(new Event('loadeddata'));
 
     expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, true, false]);
 
@@ -152,6 +156,17 @@ describe('OpenMoqMediaTracksMixin', () => {
 
     expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, false, true]);
     expect(onActiveChange).toHaveBeenCalled();
+  });
+
+  it('marks the current level when the same levels are announced again', () => {
+    const media = new OpenMoqMediaTracks();
+    const player = load(media);
+
+    player.loadLevels(LEVELS);
+    player.currentLevel = 1;
+    player.loadLevels(LEVELS);
+
+    expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, true, false]);
   });
 
   it.each([
