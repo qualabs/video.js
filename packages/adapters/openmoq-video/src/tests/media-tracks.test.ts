@@ -136,6 +136,53 @@ describe('OpenMoqMediaTracksMixin', () => {
     expect(player.setQuality).toHaveBeenLastCalledWith('auto');
   });
 
+  describe('when the levels change', () => {
+    const LEVELS_WITHOUT_1080 = [LEVELS[1]!, LEVELS[2]!].map((level, index) => ({ ...level, index }));
+
+    it('re-applies the pinned level under its new index', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.loadLevels(LEVELS);
+      media.videoRenditions.selectedIndex = 1;
+      await flush();
+      player.autoQuality = false;
+      player.loadLevels(LEVELS_WITHOUT_1080);
+      await flush();
+
+      expect(media.videoRenditions.selectedIndex).toBe(0);
+      expect(media.videoRenditions[0]?.height).toBe(720);
+      expect(player.setQuality).toHaveBeenLastCalledWith(0);
+    });
+
+    it('returns to automatic quality when the pinned level is gone', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.loadLevels(LEVELS);
+      media.videoRenditions.selectedIndex = 0;
+      await flush();
+      player.autoQuality = false;
+      player.loadLevels(LEVELS_WITHOUT_1080);
+      await flush();
+
+      expect(media.videoRenditions.selectedIndex).toBe(-1);
+      expect(player.setQuality).toHaveBeenLastCalledWith('auto');
+    });
+
+    it('leaves automatic quality alone', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.loadLevels(LEVELS);
+      player.loadLevels(LEVELS_WITHOUT_1080);
+      await flush();
+
+      expect(media.videoRenditions.selectedIndex).toBe(-1);
+      expect(player.setQuality).not.toHaveBeenCalled();
+    });
+  });
+
   it('ignores a switch that playa rejects, with a warning', async () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);

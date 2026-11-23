@@ -25,7 +25,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     #unsubscribes: (() => void)[] = [];
     // Playa re-announces its levels whenever the catalog is re-received, so a re-announcement of the same set is
     // recognized by what it announced last.
-    #levelsKey = '';
+    #levels: readonly Level[] = [];
 
     constructor(...args: any[]) {
       super(...args);
@@ -80,14 +80,32 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     };
 
     #mirrorLevels(levels: readonly Level[]) {
-      const key = levelsKey(levels);
+      if (levelsKey(levels) !== levelsKey(this.#levels)) {
+        const pinned = this.engine?.autoQuality === false ? this.#selectedLevel() : undefined;
 
-      if (key !== this.#levelsKey) {
-        this.#levelsKey = key;
+        this.#levels = levels;
         this.#replaceRenditions(levels);
+
+        if (pinned) this.#repin(pinned);
       }
 
       this.#seedActiveRendition();
+    }
+
+    #selectedLevel(): Level | undefined {
+      const selected = this.videoRenditions[this.videoRenditions.selectedIndex];
+
+      return selected?.id ? this.#levels[Number(selected.id)] : undefined;
+    }
+
+    // A new set renumbers the levels, so the pinned one is looked up again by its identity. Selecting it re-applies the
+    // pin through `change`; when it is gone, nothing is selected and playa returns to auto.
+    #repin(pinned: Level) {
+      const level = this.#levels.find((level) => levelIdentity(level) === levelIdentity(pinned));
+      const rendition = level && this.videoRenditions.getRenditionById(`${level.index}`);
+
+      if (rendition) rendition.selected = true;
+      else this.#switchRendition();
     }
 
     #replaceRenditions(levels: readonly Level[]) {
@@ -140,7 +158,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       for (const unsubscribe of this.#unsubscribes) unsubscribe();
 
       this.#unsubscribes = [];
-      this.#levelsKey = '';
+      this.#levels = [];
       this.#removeVideoTracks();
     };
 
@@ -154,8 +172,12 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
   return OpenMoqMediaTracks as unknown as Base;
 }
 
+function levelIdentity(level: Level): string {
+  return level.id ?? level.trackName;
+}
+
 function levelsKey(levels: readonly Level[]): string {
   return levels
-    .map((level) => `${level.id ?? level.trackName}|${level.width}x${level.height}|${level.codec}|${level.bitrate}`)
+    .map((level) => `${levelIdentity(level)}|${level.width}x${level.height}|${level.codec}|${level.bitrate}`)
     .join();
 }
