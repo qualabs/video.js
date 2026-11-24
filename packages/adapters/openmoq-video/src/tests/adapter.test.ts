@@ -233,14 +233,29 @@ describe('OpenMoqAdapter', () => {
       expect(onVolumeChange).toHaveBeenCalledOnce();
     });
 
-    it('reports the level playa clamps to', async () => {
+    it('throws like a media element for a level outside [0, 1] and keeps the current one', async () => {
       const media = setup();
+      const onVolumeChange = vi.fn();
 
       media.source = SOURCE;
       await nextEvent(media, 'loadstart');
-      media.volume = 2;
+      media.addEventListener('volumechange', onVolumeChange);
 
+      expect(() => {
+        media.volume = 1.5;
+      }).toThrow(expect.objectContaining({ name: 'IndexSizeError' }));
+      expect(() => {
+        media.volume = -0.1;
+      }).toThrow(expect.objectContaining({ name: 'IndexSizeError' }));
+      expect(() => {
+        media.volume = Number.NaN;
+      }).toThrow(TypeError);
+      expect(() => {
+        media.volume = Number.POSITIVE_INFINITY;
+      }).toThrow(TypeError);
       expect(media.volume).toBe(1);
+      expect(media.engine?.volume).toBe(1);
+      expect(onVolumeChange).not.toHaveBeenCalled();
     });
 
     it('passes a level set before the source to the Player', async () => {

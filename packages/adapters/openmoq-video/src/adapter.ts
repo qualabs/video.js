@@ -160,7 +160,14 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   get volume(): number {
     return this.#volume;
   }
+  // Throws as `HTMLMediaElement` does; playa would clamp the level, and its `<video>` throws on a non-finite one.
   set volume(value: number) {
+    if (!Number.isFinite(value)) throw new TypeError('The provided volume is non-finite.');
+
+    if (value < 0 || value > 1) {
+      throw new DOMException(`The volume provided (${value}) is outside the range [0, 1].`, 'IndexSizeError');
+    }
+
     if (this.#volume === value) return;
 
     this.#volume = value;
