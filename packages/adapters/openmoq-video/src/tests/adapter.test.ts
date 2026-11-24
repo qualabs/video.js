@@ -58,6 +58,13 @@ class FakeAudioContext {
   }
 }
 
+/** An `AudioContext` the browser refuses to start, as without a user gesture. */
+class RejectingAudioContext extends FakeAudioContext {
+  override resume = vi.fn(async () => {
+    throw new DOMException('Not allowed', 'NotAllowedError');
+  });
+}
+
 describe('OpenMoqAdapter', () => {
   describe('attach', () => {
     it('builds no Player for a video without a sibling canvas', async () => {
@@ -339,18 +346,12 @@ describe('OpenMoqAdapter', () => {
       expect(onVolumeChange).toHaveBeenCalledOnce();
     });
 
-    it('contains a failed unmute and keeps the Player muted', async () => {
+    it('reports the mute back when audio fails to start on unmute', async () => {
       const media = setup();
       const onVolumeChange = vi.fn();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      vi.stubGlobal(
-        'AudioContext',
-        class extends FakeAudioContext {
-          override resume = vi.fn(async () => {
-            throw new DOMException('Not allowed', 'NotAllowedError');
-          });
-        }
-      );
+      vi.stubGlobal('AudioContext', RejectingAudioContext);
       media.muted = true;
       media.source = SOURCE;
       await nextEvent(media, 'loadstart');
@@ -359,6 +360,28 @@ describe('OpenMoqAdapter', () => {
       await flush();
 
       expect(media.engine?.muted).toBe(true);
+      expect(media.muted).toBe(true);
+      expect(onVolumeChange).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith('[openmoq-video] Failed to start audio on unmute.', expect.any(DOMException));
+
+      warn.mockRestore();
+    });
+
+    it('ignores a failed unmute of a Player replaced since', async () => {
+      const media = setup();
+      const onVolumeChange = vi.fn();
+
+      vi.stubGlobal('AudioContext', RejectingAudioContext);
+      media.muted = true;
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.addEventListener('volumechange', onVolumeChange);
+      media.muted = false;
+      media.src = OTHER_URL;
+      await nextEvent(media, 'loadstart');
+
+      expect(media.muted).toBe(false);
+      expect(media.engine?.muted).toBe(false);
       expect(onVolumeChange).not.toHaveBeenCalled();
     });
   });

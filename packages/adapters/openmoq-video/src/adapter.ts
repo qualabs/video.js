@@ -195,7 +195,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
       player.mute();
     } else {
       // Playa activates LOC audio inside `unmute()`, which must run within the user gesture.
-      player.unmute().catch(noop);
+      player.unmute().catch((cause) => this.#onUnmuteFailed(player, cause));
     }
   }
 
@@ -331,6 +331,15 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #onVolumeChange(volume: number, muted: boolean): void {
     this.#volume = volume;
     this.#muted = muted;
+    this.dispatchEvent(new Event('volumechange'));
+  }
+
+  #onUnmuteFailed(player: Player, cause: unknown): void {
+    if (player !== this.#player) return;
+
+    if (__DEV__) console.warn('[openmoq-video] Failed to start audio on unmute.', cause);
+
+    this.#muted = player.muted;
     this.dispatchEvent(new Event('volumechange'));
   }
 
