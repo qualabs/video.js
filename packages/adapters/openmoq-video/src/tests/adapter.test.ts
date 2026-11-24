@@ -6,6 +6,12 @@ import { OpenMoqAdapter, type OpenMoqSource } from '../index';
 
 const SOURCE: OpenMoqSource = { url: 'https://relay.example.com/moq', namespace: 'live' };
 const OTHER_URL = 'https://relay.example.com/other';
+const UNKNOWN_LIVE_VALUES = {
+  streamType: 'unknown',
+  duration: Number.NaN,
+  targetLiveWindow: Number.NaN,
+  liveEdgeStart: Number.NaN,
+};
 const LIVE_EVENTS = ['loadedmetadata', 'durationchange', 'streamtypechange', 'targetlivewindowchange', 'emptied'];
 
 afterEach(() => {
@@ -208,7 +214,7 @@ describe('OpenMoqAdapter', () => {
     });
   });
 
-  describe('streamType', () => {
+  describe('live state', () => {
     it('is unknown with every live value NaN before metadata', async () => {
       stubPlaya();
 
@@ -217,12 +223,7 @@ describe('OpenMoqAdapter', () => {
       media.source = SOURCE;
       await nextEvent(media, 'loadstart');
 
-      expect(liveValues(media)).toEqual({
-        streamType: 'unknown',
-        duration: Number.NaN,
-        targetLiveWindow: Number.NaN,
-        liveEdgeStart: Number.NaN,
-      });
+      expect(liveValues(media)).toEqual(UNKNOWN_LIVE_VALUES);
     });
 
     it('turns live on metadata, with a live edge at the playback position', async () => {
@@ -266,7 +267,7 @@ describe('OpenMoqAdapter', () => {
       media.source = null;
 
       expect(events).toEqual(['streamtypechange', 'targetlivewindowchange', 'emptied']);
-      expect(liveValues(media)).toMatchObject({ streamType: 'unknown', targetLiveWindow: Number.NaN });
+      expect(liveValues(media)).toEqual(UNKNOWN_LIVE_VALUES);
     });
 
     it('resets on detach', async () => {
@@ -280,7 +281,7 @@ describe('OpenMoqAdapter', () => {
       media.detach();
 
       expect(events).toEqual(['streamtypechange', 'targetlivewindowchange']);
-      expect(liveValues(media)).toMatchObject({ streamType: 'unknown', targetLiveWindow: Number.NaN });
+      expect(liveValues(media)).toEqual(UNKNOWN_LIVE_VALUES);
     });
   });
 

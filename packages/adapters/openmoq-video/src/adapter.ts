@@ -128,7 +128,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return false;
   }
 
-  // Always live until qualabs/video.js#19 derives streamType and duration from the catalog's isLive (VOD).
+  // Live once metadata loads; qualabs/video.js#19 derives streamType/duration from catalog isLive (VOD).
   get streamType(): MediaStreamType {
     return this.#readyState >= MediaReadyState.HAVE_METADATA ? MediaStreamTypes.LIVE : MediaStreamTypes.UNKNOWN;
   }
