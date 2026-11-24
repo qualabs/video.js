@@ -1,5 +1,5 @@
 import type { Level, Player } from '@openmoq/playa';
-import type { MediaVideoRenditionCapability, MediaVideoTrackCapability } from '@videojs/media';
+import type { MediaVideoRenditionCapability, MediaVideoTrackCapability, VideoTrackLike } from '@videojs/media';
 import type { Constructor } from '@videojs/utils/types';
 
 type OpenMoqEngineHost = EventTarget & {
@@ -23,9 +23,7 @@ type MediaTracksHost = OpenMoqEngineHost & MediaVideoTrackCapability & MediaVide
 export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost>>(BaseClass: Base) {
   class OpenMoqMediaTracks extends (BaseClass as Constructor<MediaTracksHost>) {
     #unsubscribes: (() => void)[] = [];
-    // Playa re-announces its levels whenever the catalog is re-received, so a re-announcement of the same set is
-    // recognized by what it announced last.
-    #levels: readonly Level[] = [];
+    #videoTrack: VideoTrackLike | null = null;
 
     constructor(...args: any[]) {
       super(...args);
@@ -65,11 +63,11 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       ];
     };
 
-    // Playa replaces its levels on `catalog_updated` and `selection_changed` without announcing them, so the level
-    // indexes are re-read before one of them is marked.
+    // Playa replaces its levels on `catalog_updated` and `selection_changed` without announcing them, so they are
+    // re-read before one of them is marked.
     #onQualityChange(engine: Player, level: Level) {
       this.#mirrorLevels(engine.levels);
-      this.#setActiveRendition(level.index);
+      this.#setActiveRendition(level);
     }
 
     // Playa announces its levels only after `ready`, where the host already announced `loadedmetadata`.
@@ -79,74 +77,54 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       if (engine) this.#mirrorLevels(engine.levels);
     };
 
+    // Renditions are matched to levels by identity and updated in place, so they keep their `selected` and `active`
+    // flags while playa renumbers its levels.
     #mirrorLevels(levels: readonly Level[]) {
-      if (levelsKey(levels) !== levelsKey(this.#levels)) {
-        const pinned = this.engine?.autoQuality === false ? this.#selectedLevel() : undefined;
+      if (!this.#videoTrack && !levels.length) return;
 
-        this.#levels = levels;
-        this.#replaceRenditions(levels);
+      const videoTrack = (this.#videoTrack ??= this.#addMainTrack());
+      const identities = new Set<string | undefined>(levels.map(levelIdentity));
+      const picked = this.videoRenditions[this.videoRenditions.selectedIndex];
 
-        if (pinned) this.#repin(pinned);
+      for (const rendition of [...this.videoRenditions]) {
+        if (!identities.has(rendition.id)) videoTrack.removeRendition(rendition);
       }
+
+      for (const level of levels) {
+        if (!this.videoRenditions.getRenditionById(levelIdentity(level))) addRendition(videoTrack, level);
+      }
+
+      // Removing the picked rendition fires no `change`, and this is what returns playa to auto.
+      if (picked && !identities.has(picked.id)) this.#switchRendition();
 
       this.#seedActiveRendition();
     }
 
-    #selectedLevel(): Level | undefined {
-      const selected = this.videoRenditions[this.videoRenditions.selectedIndex];
-
-      return selected?.id ? this.#levels[Number(selected.id)] : undefined;
-    }
-
-    // A new set renumbers the levels, so the pinned one is looked up again by its identity. Selecting it re-applies the
-    // pin through `change`; when it is gone, nothing is selected and playa returns to auto.
-    #repin(pinned: Level) {
-      const level = this.#levels.find((level) => levelIdentity(level) === levelIdentity(pinned));
-      const rendition = level && this.videoRenditions.getRenditionById(`${level.index}`);
-
-      if (rendition) rendition.selected = true;
-      else this.#switchRendition();
-    }
-
-    #replaceRenditions(levels: readonly Level[]) {
-      this.#removeVideoTracks();
-
+    #addMainTrack(): VideoTrackLike {
       const videoTrack = this.addVideoTrack('main');
 
       // Selecting the track is what puts its renditions in `videoRenditions`, so
       // it happens before any is added and their `addrendition` events land.
       videoTrack.selected = true;
 
-      for (const level of levels) {
-        // Playa reports a dimension or bitrate the catalog leaves out as 0.
-        const rendition = videoTrack.addRendition(
-          '',
-          level.width || undefined,
-          level.height || undefined,
-          level.codec,
-          level.bitrate || undefined
-        );
-
-        rendition.id = `${level.index}`;
-      }
+      return videoTrack;
     }
 
     // Playa adopts the first level after announcing the levels, and reports that adoption with no event of its own,
     // so the level playing is read back once the first frame is rendered.
     #seedActiveRendition = () => {
-      this.#setActiveRendition(this.engine?.currentLevel ?? -1);
+      const { engine } = this;
+
+      this.#setActiveRendition(engine?.levels[engine.currentLevel]);
     };
 
     #switchRendition = () => {
       const { engine } = this;
       if (!engine?.levels.length) return;
 
-      // Playa replaces its levels on `catalog_updated` without an event, so the picked level is looked up in the current
-      // set rather than trusted by index.
-      const picked = this.#selectedLevel();
-      const quality = picked
-        ? engine.levels.findIndex((level) => levelIdentity(level) === levelIdentity(picked))
-        : 'auto';
+      // Playa renumbers its levels on `catalog_updated` without an event, so the index is looked up at switch time.
+      const picked = this.videoRenditions[this.videoRenditions.selectedIndex];
+      const quality = picked ? engine.levels.findIndex((level) => levelIdentity(level) === picked.id) : 'auto';
       if (quality === -1) return;
 
       engine.setQuality(quality).catch((cause) => {
@@ -154,9 +132,11 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       });
     };
 
-    #setActiveRendition(levelIndex: number) {
+    #setActiveRendition(level: Level | undefined) {
+      const identity = level && levelIdentity(level);
+
       for (const rendition of this.videoRenditions) {
-        rendition.active = rendition.id === `${levelIndex}`;
+        rendition.active = rendition.id === identity;
       }
     }
 
@@ -164,7 +144,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       for (const unsubscribe of this.#unsubscribes) unsubscribe();
 
       this.#unsubscribes = [];
-      this.#levels = [];
+      this.#videoTrack = null;
       this.#removeVideoTracks();
     };
 
@@ -186,8 +166,15 @@ function levelIdentity(level: Level): string {
   return level.id ?? level.trackName;
 }
 
-function levelsKey(levels: readonly Level[]): string {
-  return levels
-    .map((level) => `${levelIdentity(level)}|${level.width}x${level.height}|${level.codec}|${level.bitrate}`)
-    .join();
+function addRendition(videoTrack: VideoTrackLike, level: Level): void {
+  // Playa reports a dimension or bitrate the catalog leaves out as 0.
+  const rendition = videoTrack.addRendition(
+    '',
+    level.width || undefined,
+    level.height || undefined,
+    level.codec,
+    level.bitrate || undefined
+  );
+
+  rendition.id = levelIdentity(level);
 }

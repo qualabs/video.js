@@ -98,9 +98,9 @@ describe('OpenMoqMediaTracksMixin', () => {
     expect(
       [...media.videoRenditions].map(({ id, width, height, codec, bitrate }) => ({ id, width, height, codec, bitrate }))
     ).toEqual([
-      { id: '0', width: 1920, height: 1080, codec: 'avc1.640028', bitrate: 6_000_000 },
-      { id: '1', width: 1280, height: 720, codec: 'avc1.64001f', bitrate: 3_000_000 },
-      { id: '2', width: undefined, height: undefined, codec: 'avc1.42e01e', bitrate: undefined },
+      { id: 'video-1080', width: 1920, height: 1080, codec: 'avc1.640028', bitrate: 6_000_000 },
+      { id: 'video-720', width: 1280, height: 720, codec: 'avc1.64001f', bitrate: 3_000_000 },
+      { id: 'video-unsized', width: undefined, height: undefined, codec: 'avc1.42e01e', bitrate: undefined },
     ]);
   });
 
@@ -158,7 +158,7 @@ describe('OpenMoqMediaTracksMixin', () => {
   describe('when the levels change', () => {
     const LEVELS_WITHOUT_1080 = [LEVELS[1]!, LEVELS[2]!].map((level, index) => ({ ...level, index }));
 
-    it('re-applies the pinned level under its new index', async () => {
+    it('keeps the pinned level selected while playa renumbers it, without switching again', async () => {
       const media = new OpenMoqMediaTracks();
       const player = load(media);
 
@@ -169,9 +169,8 @@ describe('OpenMoqMediaTracksMixin', () => {
       player.loadLevels(LEVELS_WITHOUT_1080);
       await flush();
 
-      expect(media.videoRenditions.selectedIndex).toBe(0);
-      expect(media.videoRenditions[0]?.height).toBe(720);
-      expect(player.setQuality).toHaveBeenLastCalledWith(0);
+      expect(media.videoRenditions.getRenditionById('video-720')?.selected).toBe(true);
+      expect(player.setQuality).toHaveBeenCalledTimes(1);
     });
 
     it('returns to automatic quality when the pinned level is gone', async () => {
@@ -264,15 +263,16 @@ describe('OpenMoqMediaTracksMixin', () => {
   it('re-reads levels that changed without an announcement before marking the active one', () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
-    const reordered = [LEVELS[1]!, LEVELS[0]!].map((level, index) => ({ ...level, index }));
+    const level4k = { ...LEVELS[0]!, trackName: 'video-2160', label: '2160p', width: 3840, height: 2160 };
+    const updated = [level4k, LEVELS[0]!, LEVELS[1]!].map((level, index) => ({ ...level, index }));
 
-    player.loadLevels(LEVELS);
-    player.levels = reordered;
-    player.switchTo(reordered[1]!);
+    player.loadLevels([LEVELS[0]!, LEVELS[1]!]);
+    player.levels = updated;
+    player.switchTo(updated[1]!);
 
-    expect([...media.videoRenditions].map(({ height, active }) => ({ height, active }))).toEqual([
-      { height: 720, active: false },
-      { height: 1080, active: true },
+    expect(media.videoRenditions.length).toBe(3);
+    expect([...media.videoRenditions].filter((rendition) => rendition.active).map(({ height }) => height)).toEqual([
+      1080,
     ]);
   });
 
