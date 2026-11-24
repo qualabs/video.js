@@ -321,6 +321,26 @@ describe('OpenMoqMediaTracksMixin', () => {
       expect(player.setQuality.mock.calls).toEqual([[1]]);
     });
 
+    it('returns to automatic quality when the video levels come back after going empty under a pin', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.loadLevels(LEVELS);
+      media.videoRenditions.selectedIndex = 1;
+      await flush();
+      player.loadLevels([]);
+      player.loadLevels(LEVELS);
+      await flush();
+
+      expect(media.videoRenditions.selectedIndex).toBe(-1);
+      expect(player.setQuality).toHaveBeenLastCalledWith('auto');
+
+      media.videoRenditions.selectedIndex = 1;
+      await flush();
+
+      expect(player.setQuality).toHaveBeenLastCalledWith(1);
+    });
+
     it('leaves automatic quality alone', async () => {
       const media = new OpenMoqMediaTracks();
       const player = load(media);

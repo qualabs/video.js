@@ -84,7 +84,6 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
       const videoTrack = (this.#videoTrack ??= this.#addMainTrack());
       const renditions = [...this.videoRenditions];
-      const picked = this.videoRenditions[this.videoRenditions.selectedIndex];
 
       const changedAt = renditions.findIndex((rendition, index) => !matchesLevel(rendition, levels[index]));
       const kept = changedAt === -1 ? renditions.length : changedAt;
@@ -98,8 +97,8 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
         rendition.selected = previous?.selected ?? false;
       }
 
-      // removing the picked rendition fires no change; send playa back to auto
-      if (picked && !levels.some((level) => levelIdentity(level) === picked.id)) this.#switchRendition();
+      // pick removed (fires no change), or removed while levels were empty: list on auto, playa still pinned
+      if (levels.length && this.videoRenditions.selectedIndex === -1 && this.#requested) this.#switchRendition();
 
       this.#seedActiveRendition();
     }
