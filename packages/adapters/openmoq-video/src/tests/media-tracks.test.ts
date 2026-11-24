@@ -50,6 +50,12 @@ class FakePlayer {
     this.levels = levels;
     this.emit('levelsloaded', { levels });
   }
+
+  /** Playa commits `currentLevel` before it announces the switch. */
+  switchTo(level: Level): void {
+    this.currentLevel = level.index;
+    this.emit('qualitychange', { level, auto: this.autoQuality });
+  }
 }
 
 class FakeHost extends EventTarget {
@@ -237,7 +243,7 @@ describe('OpenMoqMediaTracksMixin', () => {
 
     expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, true, false]);
 
-    player.emit('qualitychange', { level: LEVELS[2]!, auto: true });
+    player.switchTo(LEVELS[2]!);
     await flush();
 
     expect([...media.videoRenditions].map((rendition) => rendition.active)).toEqual([false, false, true]);
@@ -262,7 +268,7 @@ describe('OpenMoqMediaTracksMixin', () => {
 
     player.loadLevels(LEVELS);
     player.levels = reordered;
-    player.emit('qualitychange', { level: reordered[1]!, auto: true });
+    player.switchTo(reordered[1]!);
 
     expect([...media.videoRenditions].map(({ height, active }) => ({ height, active }))).toEqual([
       { height: 720, active: false },
