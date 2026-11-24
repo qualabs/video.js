@@ -123,6 +123,19 @@ describe('OpenMoqMediaTracksMixin', () => {
     expect(player.setQuality).toHaveBeenCalledWith(2);
   });
 
+  it('switches to the picked level after playa replaced its levels without an announcement', async () => {
+    const media = new OpenMoqMediaTracks();
+    const player = load(media);
+    const level4k = { ...LEVELS[0]!, trackName: 'video-2160', label: '2160p', width: 3840, height: 2160 };
+
+    player.loadLevels([LEVELS[0]!, LEVELS[1]!]);
+    player.levels = [level4k, LEVELS[0]!, LEVELS[1]!].map((level, index) => ({ ...level, index }));
+    media.videoRenditions.selectedIndex = 1;
+    await flush();
+
+    expect(player.setQuality).toHaveBeenCalledWith(2);
+  });
+
   it('returns to automatic quality when no rendition is selected', async () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);

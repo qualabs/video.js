@@ -141,9 +141,15 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       const { engine } = this;
       if (!engine?.levels.length) return;
 
-      const selected = this.videoRenditions[this.videoRenditions.selectedIndex];
+      // Playa replaces its levels on `catalog_updated` without an event, so the picked level is looked up in the current
+      // set rather than trusted by index.
+      const picked = this.#selectedLevel();
+      const quality = picked
+        ? engine.levels.findIndex((level) => levelIdentity(level) === levelIdentity(picked))
+        : 'auto';
+      if (quality === -1) return;
 
-      engine.setQuality(selected?.id ? Number(selected.id) : 'auto').catch((cause) => {
+      engine.setQuality(quality).catch((cause) => {
         if (__DEV__) console.warn('[openmoq-video] Failed to switch the video rendition.', cause);
       });
     };
