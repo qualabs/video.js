@@ -327,7 +327,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.#fail(error);
   }
 
-  // Playa clamps the level and settles `unmute()` asynchronously, so its report is the state that holds.
+  // Playa settles `unmute()` asynchronously, so its report is the state that holds.
   #onVolumeChange(volume: number, muted: boolean): void {
     this.#volume = volume;
     this.#muted = muted;
