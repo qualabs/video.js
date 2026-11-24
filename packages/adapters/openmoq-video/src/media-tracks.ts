@@ -131,8 +131,10 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       // Playa renumbers its levels on `catalog_updated` without an event, so the index is looked up at switch time.
       const quality = requested ? engine.levels.findIndex((level) => levelIdentity(level) === requested) : 'auto';
 
+      // The list is re-read only after the restore, which keeps a previous pin that re-reading alone would send to auto.
       if (quality === -1) {
         this.#restoreSelection(engine, this.#requested);
+        this.#mirrorLevels(engine.levels);
         return;
       }
 

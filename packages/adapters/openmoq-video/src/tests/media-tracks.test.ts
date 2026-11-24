@@ -254,7 +254,7 @@ describe('OpenMoqMediaTracksMixin', () => {
       }
     );
 
-    it('selects the previous rendition again when playa already dropped the picked level', async () => {
+    it('selects the previous rendition again and drops the picked level when playa already dropped it', async () => {
       const { media, player } = setup();
 
       media.videoRenditions.selectedIndex = 1;
@@ -263,7 +263,10 @@ describe('OpenMoqMediaTracksMixin', () => {
       media.videoRenditions.selectedIndex = 0;
       await settle();
 
-      expect([...media.videoRenditions].map((rendition) => rendition.selected)).toEqual([false, true, false]);
+      expect([...media.videoRenditions].map(({ id, selected }) => ({ id, selected }))).toEqual([
+        { id: 'video-720', selected: true },
+        { id: 'video-unsized', selected: false },
+      ]);
       expect(player.setQuality.mock.calls).toEqual([[1]]);
     });
 
