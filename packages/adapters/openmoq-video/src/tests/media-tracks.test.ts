@@ -254,6 +254,19 @@ describe('OpenMoqMediaTracksMixin', () => {
       }
     );
 
+    it('selects the previous rendition again when playa already dropped the picked level', async () => {
+      const { media, player } = setup();
+
+      media.videoRenditions.selectedIndex = 1;
+      await settle();
+      player.levels = [LEVELS[1]!, LEVELS[2]!].map((level, index) => ({ ...level, index }));
+      media.videoRenditions.selectedIndex = 0;
+      await settle();
+
+      expect([...media.videoRenditions].map((rendition) => rendition.selected)).toEqual([false, true, false]);
+      expect(player.setQuality.mock.calls).toEqual([[1]]);
+    });
+
     it('returns to automatic quality when the previous rendition is gone', async () => {
       const { media, player } = setup();
 

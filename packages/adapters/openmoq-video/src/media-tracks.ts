@@ -130,7 +130,11 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
       // Playa renumbers its levels on `catalog_updated` without an event, so the index is looked up at switch time.
       const quality = requested ? engine.levels.findIndex((level) => levelIdentity(level) === requested) : 'auto';
-      if (quality === -1) return;
+
+      if (quality === -1) {
+        this.#restoreSelection(engine, this.#requested);
+        return;
+      }
 
       const previous = this.#requested;
 
@@ -143,8 +147,9 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       });
     };
 
-    // A rejected switch leaves playa on the level it was playing, with ABR already turned off. A previous manual pick
-    // is that level, so only the list goes back to it; otherwise ABR is turned back on.
+    // A rejected switch, or a pick playa has already dropped, leaves playa on the level it was playing, with ABR off
+    // after a rejection. A previous manual pick is that level, so only the list goes back to it; otherwise ABR is turned
+    // back on.
     #restoreSelection(engine: Player, previous: string | undefined) {
       const renditions = [...this.videoRenditions];
       const index =
