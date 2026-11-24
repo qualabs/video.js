@@ -37,6 +37,7 @@ export const CDN_MEDIA_SUBPATHS = [
   'mux-video/hls-js',
   'mux-video/spf',
   'native-hls-video',
+  'openmoq-video',
   'playerjs-video',
   'shaka-video',
   'soundcloud-audio',

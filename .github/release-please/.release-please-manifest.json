@@ -17,6 +17,7 @@
   "packages/extensions/mux-data": "10.5.0",
   "packages/adapters/mux-video": "10.5.0",
   "packages/adapters/native-hls-video": "10.5.0",
+  "packages/adapters/openmoq-video": "10.5.0",
   "packages/react": "10.5.0",
   "packages/adapters/shaka-video": "10.5.0",
   "packages/skins": "10.5.0",
