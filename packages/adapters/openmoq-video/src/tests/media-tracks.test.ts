@@ -51,7 +51,7 @@ class FakePlayer {
     this.emit('levelsloaded', { levels });
   }
 
-  /** Playa commits `currentLevel` before it announces the switch. */
+  /** Playa sets currentLevel before qualitychange */
   switchTo(level: Level): void {
     this.currentLevel = level.index;
     this.emit('qualitychange', { level, auto: this.autoQuality });
@@ -70,18 +70,16 @@ class FakeHost extends EventTarget {
 
 const OpenMoqMediaTracks = OpenMoqMediaTracksMixin(MediaTracksMixin(FakeHost));
 
-/** Binds a new Player the way the adapter does: set as `engine`, then announced by `loadstart`. */
 function load(media: InstanceType<typeof OpenMoqMediaTracks>): FakePlayer {
   const player = new FakePlayer();
 
-  // SAFETY: The fake implements the Player members and events used by this mixin, which does not need its nominal brand.
+  // SAFETY: the fake covers the Player API the mixin uses.
   media.engine = player as unknown as Player;
   media.dispatchEvent(new Event('loadstart'));
 
   return player;
 }
 
-/** Playa's levels after a catalog update adds a 2160p rendition, which sorts first. */
 function withLevel4k(levels: Level[]): Level[] {
   const level4k = {
     ...levels[0]!,

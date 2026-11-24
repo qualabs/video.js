@@ -17,20 +17,14 @@ type OpenMoqEngineHost = EventTarget & {
 type MediaTracksHost = OpenMoqEngineHost & MediaVideoTrackCapability & MediaVideoRenditionCapability;
 
 /**
- * Mirrors the playa `Player` levels into the media element's `videoRenditions` list, and wires user selection back to
- * `engine.setQuality()`.
- *
- * Levels are hung off a single `'main'` video track. A new `Player` is created for every source, so the mixin binds to
- * each one on `loadstart`.
- *
- * Requires the media-tracks mixin (track-list infrastructure) to be applied earlier in the chain so the host exposes
- * `addVideoTrack`, `videoRenditions`, and friends.
+ * Mirrors playa levels into `videoRenditions` under one `main` track; selection goes to `setQuality()`. Needs
+ * `MediaTracksMixin` earlier in the chain.
  */
 export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost>>(BaseClass: Base) {
   class OpenMoqMediaTracks extends (BaseClass as Constructor<MediaTracksHost>) {
     #unsubscribes: (() => void)[] = [];
     #videoTrack: VideoTrackLike | null = null;
-    // Identity of the level last asked of playa, or undefined for auto.
+    // level identity last sent to playa; undefined = auto
     #requested: string | undefined;
 
     constructor(...args: any[]) {
@@ -71,23 +65,20 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       ];
     };
 
-    // Playa replaces its levels on `catalog_updated` and `selection_changed` without announcing them, so they are
-    // re-read before one of them is marked.
+    // playa swaps levels on catalog_updated/selection_changed w/o event; re-read before marking
     #onQualityChange(engine: Player, level: Level) {
       this.#mirrorLevels(engine.levels);
       this.#setActiveRendition(level);
     }
 
-    // Playa announces its levels only after `ready`, where the host already announced `loadedmetadata`.
+    // playa's levelsloaded comes after the host's loadedmetadata
     #onLoadedMetadata = () => {
       const { engine } = this;
 
       if (engine) this.#mirrorLevels(engine.levels);
     };
 
-    // The list keeps the order renditions were added in and their attributes as added, so from the first one that no
-    // longer matches its level on, they are added again in playa's order. Matched by identity, a rendition carries its
-    // `selected` flag over while playa renumbers its levels, and `active` is read back from playa.
+    // list only keeps insertion order: re-add from the first mismatch on, carrying `selected` by identity
     #mirrorLevels(levels: readonly Level[]) {
       if (!this.#videoTrack && !levels.length) return;
 
@@ -107,7 +98,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
         rendition.selected = previous?.selected ?? false;
       }
 
-      // Removing the picked rendition fires no `change`, and this is what returns playa to auto.
+      // removing the picked rendition fires no change; send playa back to auto
       if (picked && !levels.some((level) => levelIdentity(level) === picked.id)) this.#switchRendition();
 
       this.#seedActiveRendition();
@@ -116,15 +107,13 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     #addMainTrack(): VideoTrackLike {
       const videoTrack = this.addVideoTrack('main');
 
-      // Selecting the track is what puts its renditions in `videoRenditions`, so
-      // it happens before any is added and their `addrendition` events land.
+      // select before adding, or addrendition events don't fire
       videoTrack.selected = true;
 
       return videoTrack;
     }
 
-    // Playa adopts the first level after announcing the levels, and reports that adoption with no event of its own,
-    // so the level playing is read back once the first frame is rendered.
+    // playa adopts its first level w/o event; read it back at first frame
     #seedActiveRendition = () => {
       const { engine } = this;
 
@@ -138,10 +127,10 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       const requested = this.videoRenditions[this.videoRenditions.selectedIndex]?.id;
       if (requested === this.#requested) return;
 
-      // Playa renumbers its levels on `catalog_updated` without an event, so the index is looked up at switch time.
+      // playa renumbers levels w/o event; look the index up now
       const quality = requested ? engine.levels.findIndex((level) => levelIdentity(level) === requested) : 'auto';
 
-      // The list is re-read only after the restore, which keeps a previous pin that re-reading alone would send to auto.
+      // restore before re-reading, or the previous pin goes to auto
       if (quality === -1) {
         this.#restoreSelection(engine, this.#requested);
         this.#mirrorLevels(engine.levels);
@@ -159,9 +148,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       });
     };
 
-    // A rejected switch, or a pick playa has already dropped, leaves playa on the level it was playing, with ABR off
-    // after a rejection. A previous manual pick is that level, so only the list goes back to it; otherwise ABR is turned
-    // back on.
+    // failed switch: playa stays on the playing level (ABR off). Re-select the previous pick, else back to auto
     #restoreSelection(engine: Player, previous: string | undefined) {
       const renditions = [...this.videoRenditions];
       const index =
@@ -169,7 +156,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
           ? renditions.findIndex((rendition) => rendition.id === previous)
           : -1;
 
-      // `selectedIndex` deselects the rejected pick too, which a rendition's own `selected` does not.
+      // selectedIndex also clears the rejected pick; rendition.selected wouldn't
       this.#requested = renditions[index]?.id;
       this.videoRenditions.selectedIndex = index;
 
@@ -193,8 +180,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#removeVideoTracks();
     };
 
-    // Removing a track announces only `removetrack`, so its renditions are removed first and `videoRenditions` listeners
-    // see them go.
+    // removeVideoTrack only fires removetrack; remove renditions first
     #removeVideoTracks() {
       for (const videoTrack of this.videoTracks) {
         for (const rendition of [...this.videoRenditions]) videoTrack.removeRendition(rendition);
@@ -211,7 +197,7 @@ function levelIdentity(level: Level): string {
   return level.id ?? level.trackName;
 }
 
-// Playa reports a dimension or bitrate the catalog leaves out as 0.
+// playa reports missing size/bitrate as 0
 function toRendition(level: Level) {
   return {
     id: levelIdentity(level),
