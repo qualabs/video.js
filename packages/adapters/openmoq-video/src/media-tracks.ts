@@ -1,5 +1,10 @@
 import type { Level, Player } from '@openmoq/playa';
-import type { MediaVideoRenditionCapability, MediaVideoTrackCapability, VideoTrackLike } from '@videojs/media';
+import type {
+  MediaVideoRenditionCapability,
+  MediaVideoTrackCapability,
+  VideoRenditionLike,
+  VideoTrackLike,
+} from '@videojs/media';
 import { noop } from '@videojs/utils/function';
 import type { Constructor } from '@videojs/utils/types';
 
@@ -80,25 +85,30 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       if (engine) this.#mirrorLevels(engine.levels);
     };
 
-    // Renditions are matched to levels by identity and updated in place, so they keep their `selected` and `active`
-    // flags while playa renumbers its levels.
+    // The list keeps the order renditions were added in and their attributes as added, so from the first one that no
+    // longer matches its level on, they are added again in playa's order. Matched by identity, a rendition carries its
+    // `selected` flag over while playa renumbers its levels, and `active` is read back from playa.
     #mirrorLevels(levels: readonly Level[]) {
       if (!this.#videoTrack && !levels.length) return;
 
       const videoTrack = (this.#videoTrack ??= this.#addMainTrack());
-      const identities = new Set<string | undefined>(levels.map(levelIdentity));
+      const renditions = [...this.videoRenditions];
       const picked = this.videoRenditions[this.videoRenditions.selectedIndex];
 
-      for (const rendition of [...this.videoRenditions]) {
-        if (!identities.has(rendition.id)) videoTrack.removeRendition(rendition);
-      }
+      const changedAt = renditions.findIndex((rendition, index) => !matchesLevel(rendition, levels[index]));
+      const kept = changedAt === -1 ? renditions.length : changedAt;
 
-      for (const level of levels) {
-        if (!this.videoRenditions.getRenditionById(levelIdentity(level))) addRendition(videoTrack, level);
+      for (const rendition of renditions.slice(kept)) videoTrack.removeRendition(rendition);
+
+      for (const level of levels.slice(kept)) {
+        const previous = renditions.find((rendition) => rendition.id === levelIdentity(level));
+        const rendition = addRendition(videoTrack, level);
+
+        rendition.selected = previous?.selected ?? false;
       }
 
       // Removing the picked rendition fires no `change`, and this is what returns playa to auto.
-      if (picked && !identities.has(picked.id)) this.#switchRendition();
+      if (picked && !levels.some((level) => levelIdentity(level) === picked.id)) this.#switchRendition();
 
       this.#seedActiveRendition();
     }
@@ -201,15 +211,36 @@ function levelIdentity(level: Level): string {
   return level.id ?? level.trackName;
 }
 
-function addRendition(videoTrack: VideoTrackLike, level: Level): void {
-  // Playa reports a dimension or bitrate the catalog leaves out as 0.
-  const rendition = videoTrack.addRendition(
-    '',
-    level.width || undefined,
-    level.height || undefined,
-    level.codec,
-    level.bitrate || undefined
-  );
+// Playa reports a dimension or bitrate the catalog leaves out as 0.
+function toRendition(level: Level) {
+  return {
+    id: levelIdentity(level),
+    width: level.width || undefined,
+    height: level.height || undefined,
+    codec: level.codec,
+    bitrate: level.bitrate || undefined,
+  };
+}
 
-  rendition.id = levelIdentity(level);
+function matchesLevel(rendition: VideoRenditionLike, level: Level | undefined): boolean {
+  if (!level) return false;
+
+  const { id, width, height, codec, bitrate } = toRendition(level);
+
+  return (
+    rendition.id === id &&
+    rendition.width === width &&
+    rendition.height === height &&
+    rendition.codec === codec &&
+    rendition.bitrate === bitrate
+  );
+}
+
+function addRendition(videoTrack: VideoTrackLike, level: Level): VideoRenditionLike {
+  const { id, width, height, codec, bitrate } = toRendition(level);
+  const rendition = videoTrack.addRendition('', width, height, codec, bitrate);
+
+  rendition.id = id;
+
+  return rendition;
 }

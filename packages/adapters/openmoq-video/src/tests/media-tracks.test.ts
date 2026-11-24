@@ -81,6 +81,20 @@ function load(media: InstanceType<typeof OpenMoqMediaTracks>): FakePlayer {
   return player;
 }
 
+/** Playa's levels after a catalog update adds a 2160p rendition, which sorts first. */
+function withLevel4k(levels: Level[]): Level[] {
+  const level4k = {
+    ...levels[0]!,
+    trackName: 'video-2160',
+    label: '2160p',
+    width: 3840,
+    height: 2160,
+    bitrate: 12_000_000,
+  };
+
+  return [level4k, ...levels].map((level, index) => ({ ...level, index }));
+}
+
 function flush(): Promise<void> {
   return Promise.resolve();
 }
@@ -132,10 +146,9 @@ describe('OpenMoqMediaTracksMixin', () => {
   it('switches to the picked level after playa replaced its levels without an announcement', async () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
-    const level4k = { ...LEVELS[0]!, trackName: 'video-2160', label: '2160p', width: 3840, height: 2160 };
 
     player.loadLevels([LEVELS[0]!, LEVELS[1]!]);
-    player.levels = [level4k, LEVELS[0]!, LEVELS[1]!].map((level, index) => ({ ...level, index }));
+    player.levels = withLevel4k([LEVELS[0]!, LEVELS[1]!]);
     media.videoRenditions.selectedIndex = 1;
     await flush();
 
@@ -170,6 +183,53 @@ describe('OpenMoqMediaTracksMixin', () => {
       await flush();
 
       expect(media.videoRenditions.getRenditionById('video-720')?.selected).toBe(true);
+      expect(player.setQuality).toHaveBeenCalledTimes(1);
+    });
+
+    it('lists a level added mid-stream in bitrate order', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.loadLevels([LEVELS[0]!, LEVELS[1]!]);
+      player.loadLevels(withLevel4k([LEVELS[0]!, LEVELS[1]!]));
+
+      expect([...media.videoRenditions].map(({ id }) => id)).toEqual(['video-2160', 'video-1080', 'video-720']);
+    });
+
+    it('refreshes the attributes of a level that keeps its identity', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.loadLevels(LEVELS);
+      player.loadLevels([LEVELS[0]!, { ...LEVELS[1]!, bitrate: 2_500_000 }, LEVELS[2]!]);
+
+      expect([...media.videoRenditions].map(({ id, bitrate }) => ({ id, bitrate }))).toEqual([
+        { id: 'video-1080', bitrate: 6_000_000 },
+        { id: 'video-720', bitrate: 2_500_000 },
+        { id: 'video-unsized', bitrate: undefined },
+      ]);
+    });
+
+    it('carries the selected and active rendition over when it moves', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+      const updated = withLevel4k(LEVELS);
+
+      player.loadLevels(LEVELS);
+      media.videoRenditions.selectedIndex = 1;
+      await flush();
+      player.autoQuality = false;
+      player.switchTo(LEVELS[1]!);
+      player.currentLevel = 2;
+      player.loadLevels(updated);
+      await flush();
+
+      expect([...media.videoRenditions].map(({ id, selected, active }) => ({ id, selected, active }))).toEqual([
+        { id: 'video-2160', selected: false, active: false },
+        { id: 'video-1080', selected: false, active: false },
+        { id: 'video-720', selected: true, active: true },
+        { id: 'video-unsized', selected: false, active: false },
+      ]);
       expect(player.setQuality).toHaveBeenCalledTimes(1);
     });
 
@@ -351,8 +411,7 @@ describe('OpenMoqMediaTracksMixin', () => {
   it('re-reads levels that changed without an announcement before marking the active one', () => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
-    const level4k = { ...LEVELS[0]!, trackName: 'video-2160', label: '2160p', width: 3840, height: 2160 };
-    const updated = [level4k, LEVELS[0]!, LEVELS[1]!].map((level, index) => ({ ...level, index }));
+    const updated = withLevel4k([LEVELS[0]!, LEVELS[1]!]);
 
     player.loadLevels([LEVELS[0]!, LEVELS[1]!]);
     player.levels = updated;
