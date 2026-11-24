@@ -1,5 +1,5 @@
 import { Player } from '@openmoq/playa';
-import { MediaError } from '@videojs/media';
+import { isMediaVolumeCapable, MediaError } from '@videojs/media';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { OpenMoqAdapter, type OpenMoqSource } from '../index';
@@ -211,6 +211,13 @@ describe('OpenMoqAdapter', () => {
       vi.unstubAllGlobals();
     });
 
+    it('is volume capable before a Player exists', () => {
+      const media = new OpenMoqAdapter();
+
+      expect(isMediaVolumeCapable(media)).toBe(true);
+      expect(media).toMatchObject({ volume: 1, muted: false });
+    });
+
     it('sets the Player level and relays its volumechange once', async () => {
       const media = setup();
       const onVolumeChange = vi.fn();
@@ -304,7 +311,7 @@ describe('OpenMoqAdapter', () => {
       expect(onVolumeChange).toHaveBeenCalledOnce();
     });
 
-    it('keeps the Player muted when its audio fails to start', async () => {
+    it('contains a failed unmute and keeps the Player muted', async () => {
       const media = setup();
       const onVolumeChange = vi.fn();
 
