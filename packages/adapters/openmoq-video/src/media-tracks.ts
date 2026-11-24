@@ -168,8 +168,12 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#removeVideoTracks();
     };
 
+    // Removing a track announces only `removetrack`, so its renditions are removed first and `videoRenditions` listeners
+    // see them go.
     #removeVideoTracks() {
       for (const videoTrack of this.videoTracks) {
+        for (const rendition of [...this.videoRenditions]) videoTrack.removeRendition(rendition);
+
         this.removeVideoTrack(videoTrack);
       }
     }

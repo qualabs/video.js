@@ -270,6 +270,19 @@ describe('OpenMoqMediaTracksMixin', () => {
     ]);
   });
 
+  it('announces the renditions it removes', async () => {
+    const media = new OpenMoqMediaTracks();
+    const player = load(media);
+    const onRemoveRendition = vi.fn();
+
+    player.loadLevels(LEVELS);
+    media.videoRenditions.addEventListener('removerendition', onRemoveRendition);
+    media.dispatchEvent(new Event('emptied'));
+    await flush();
+
+    expect(onRemoveRendition).toHaveBeenCalledTimes(LEVELS.length);
+  });
+
   it.each([
     ['loadstart', load],
     ['emptied', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.dispatchEvent(new Event('emptied'))],
