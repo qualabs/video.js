@@ -233,18 +233,26 @@ describe('OpenMoqMediaTracksMixin', () => {
       expect(player.setQuality).toHaveBeenLastCalledWith('auto');
     });
 
-    it('selects the previous rendition again without switching to it', async () => {
-      const { media, player } = setup();
+    it.each([
+      ['before', 0, 1],
+      ['after', 2, 1],
+    ])(
+      'selects the previous rendition, listed %s the rejected one, again without switching to it',
+      async (_order, previous, rejected) => {
+        const { media, player } = setup();
 
-      media.videoRenditions.selectedIndex = 0;
-      await settle();
-      player.setQuality.mockRejectedValueOnce(cause);
-      media.videoRenditions.selectedIndex = 1;
-      await settle();
+        media.videoRenditions.selectedIndex = previous;
+        await settle();
+        player.setQuality.mockRejectedValueOnce(cause);
+        media.videoRenditions.selectedIndex = rejected;
+        await settle();
 
-      expect(media.videoRenditions.selectedIndex).toBe(0);
-      expect(player.setQuality.mock.calls).toEqual([[0], [1]]);
-    });
+        expect([...media.videoRenditions].map((rendition) => rendition.selected)).toEqual(
+          LEVELS.map((_level, index) => index === previous)
+        );
+        expect(player.setQuality.mock.calls).toEqual([[previous], [rejected]]);
+      }
+    );
 
     it('returns to automatic quality when the previous rendition is gone', async () => {
       const { media, player } = setup();

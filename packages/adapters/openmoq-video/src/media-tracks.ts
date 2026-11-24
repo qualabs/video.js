@@ -146,20 +146,17 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     // A rejected switch leaves playa on the level it was playing, with ABR already turned off. A previous manual pick
     // is that level, so only the list goes back to it; otherwise ABR is turned back on.
     #restoreSelection(engine: Player, previous: string | undefined) {
-      const rendition =
+      const renditions = [...this.videoRenditions];
+      const index =
         previous && engine.levels.some((level) => levelIdentity(level) === previous)
-          ? this.videoRenditions.getRenditionById(previous)
-          : null;
+          ? renditions.findIndex((rendition) => rendition.id === previous)
+          : -1;
 
-      this.#requested = rendition?.id;
+      // `selectedIndex` deselects the rejected pick too, which a rendition's own `selected` does not.
+      this.#requested = renditions[index]?.id;
+      this.videoRenditions.selectedIndex = index;
 
-      if (rendition) {
-        rendition.selected = true;
-        return;
-      }
-
-      this.videoRenditions.selectedIndex = -1;
-      engine.setQuality('auto').catch(noop);
+      if (index === -1) engine.setQuality('auto').catch(noop);
     }
 
     #setActiveRendition(level: Level | undefined) {
