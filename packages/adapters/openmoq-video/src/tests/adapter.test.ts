@@ -346,6 +346,20 @@ describe('OpenMoqAdapter', () => {
       expect(onVolumeChange).toHaveBeenCalledOnce();
     });
 
+    it('reports the mute playa settles on when an unmute overtakes a later mute', async () => {
+      const media = setup();
+
+      media.muted = true;
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.muted = false;
+      media.muted = true;
+      await flush();
+
+      expect(media.engine?.muted).toBe(false);
+      expect(media.muted).toBe(false);
+    });
+
     it('reports the mute back when audio fails to start on unmute', async () => {
       const media = setup();
       const onVolumeChange = vi.fn();
