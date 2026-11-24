@@ -171,7 +171,12 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     if (this.#volume === value) return;
 
     this.#volume = value;
-    this.#player?.setVolume(value);
+
+    if (this.#player) {
+      this.#player.setVolume(value);
+    } else {
+      this.dispatchEvent(new Event('volumechange'));
+    }
   }
 
   get muted(): boolean {
@@ -182,11 +187,15 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
     this.#muted = value;
 
-    if (value) {
-      this.#player?.mute();
+    const player = this.#player;
+
+    if (!player) {
+      this.dispatchEvent(new Event('volumechange'));
+    } else if (value) {
+      player.mute();
     } else {
       // Playa activates LOC audio inside `unmute()`, which must run within the user gesture.
-      this.#player?.unmute().catch(noop);
+      player.unmute().catch(noop);
     }
   }
 

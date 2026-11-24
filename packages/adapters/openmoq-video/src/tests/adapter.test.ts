@@ -258,6 +258,19 @@ describe('OpenMoqAdapter', () => {
       expect(onVolumeChange).not.toHaveBeenCalled();
     });
 
+    it('announces a level and mute set while no Player exists', () => {
+      const media = setup();
+      const onVolumeChange = vi.fn();
+
+      media.addEventListener('volumechange', onVolumeChange);
+      media.volume = 0.5;
+      media.volume = 0.5;
+      media.muted = true;
+      media.muted = true;
+
+      expect(onVolumeChange).toHaveBeenCalledTimes(2);
+    });
+
     it('passes a level set before the source to the Player', async () => {
       const media = setup();
 
