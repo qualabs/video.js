@@ -1,6 +1,6 @@
 import { Player } from '@openmoq/playa';
 import { MediaError } from '@videojs/media';
-import { describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { OpenMoqAdapter, type OpenMoqSource } from '../index';
 
@@ -30,6 +30,32 @@ function flush(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+/**
+ * The Web Audio surface playa touches, which jsdom lacks. jsdom also lacks WebCodecs and MSE, so playa takes the LOC
+ * path.
+ */
+class FakeAudioContext {
+  static instances: FakeAudioContext[] = [];
+
+  state: AudioContextState = 'suspended';
+  destination = {};
+  resume = vi.fn(async () => {
+    this.state = 'running';
+  });
+
+  constructor() {
+    FakeAudioContext.instances.push(this);
+  }
+
+  createGain() {
+    return { gain: { value: 1 }, connect: vi.fn() };
+  }
+
+  async close() {
+    this.state = 'closed';
+  }
 }
 
 describe('OpenMoqAdapter', () => {
@@ -172,6 +198,133 @@ describe('OpenMoqAdapter', () => {
 
       expect(() => media.pause()).not.toThrow();
       expect(media.engine?.state).toBe('loading');
+    });
+  });
+
+  describe('volume', () => {
+    beforeEach(() => {
+      FakeAudioContext.instances = [];
+      vi.stubGlobal('AudioContext', FakeAudioContext);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('sets the Player level and relays its volumechange once', async () => {
+      const media = setup();
+      const onVolumeChange = vi.fn();
+
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.addEventListener('volumechange', onVolumeChange);
+      media.volume = 0.5;
+      media.volume = 0.5;
+
+      expect(media.engine?.volume).toBe(0.5);
+      expect(media.volume).toBe(0.5);
+      expect(onVolumeChange).toHaveBeenCalledOnce();
+    });
+
+    it('reports the level playa clamps to', async () => {
+      const media = setup();
+
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.volume = 2;
+
+      expect(media.volume).toBe(1);
+    });
+
+    it('passes a level set before the source to the Player', async () => {
+      const media = setup();
+
+      media.volume = 0.3;
+      media.muted = true;
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+
+      expect(media.engine).toMatchObject({ volume: 0.3, muted: true });
+    });
+
+    it('keeps the level and mute across a source change', async () => {
+      const media = setup();
+
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.volume = 0.4;
+      media.muted = true;
+      media.src = OTHER_URL;
+      await nextEvent(media, 'loadstart');
+
+      expect(media.engine).toMatchObject({ volume: 0.4, muted: true });
+    });
+  });
+
+  describe('muted', () => {
+    beforeEach(() => {
+      FakeAudioContext.instances = [];
+      vi.stubGlobal('AudioContext', FakeAudioContext);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('mutes the Player and relays its volumechange', async () => {
+      const media = setup();
+      const onVolumeChange = vi.fn();
+
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.addEventListener('volumechange', onVolumeChange);
+      media.muted = true;
+      media.muted = true;
+
+      expect(media.engine?.muted).toBe(true);
+      expect(onVolumeChange).toHaveBeenCalledOnce();
+    });
+
+    it('resumes LOC audio within the unmuting call, then reports the unmute', async () => {
+      const media = setup();
+      const onVolumeChange = vi.fn();
+
+      media.muted = true;
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.addEventListener('volumechange', onVolumeChange);
+      media.muted = false;
+
+      expect(FakeAudioContext.instances.at(-1)?.resume).toHaveBeenCalledOnce();
+      expect(media.muted).toBe(false);
+
+      await nextEvent(media, 'volumechange');
+
+      expect(media.engine?.muted).toBe(false);
+      expect(onVolumeChange).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the Player muted when its audio fails to start', async () => {
+      const media = setup();
+      const onVolumeChange = vi.fn();
+
+      vi.stubGlobal(
+        'AudioContext',
+        class extends FakeAudioContext {
+          override resume = vi.fn(async () => {
+            throw new DOMException('Not allowed', 'NotAllowedError');
+          });
+        }
+      );
+      media.muted = true;
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+      media.addEventListener('volumechange', onVolumeChange);
+      media.muted = false;
+      await flush();
+
+      expect(media.engine?.muted).toBe(true);
+      expect(onVolumeChange).not.toHaveBeenCalled();
     });
   });
 });
