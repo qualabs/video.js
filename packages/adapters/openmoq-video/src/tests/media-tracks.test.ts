@@ -1,6 +1,6 @@
 import type { Level, Player, PlayerEventMap } from '@openmoq/playa';
 import { MediaTracksMixin } from '@videojs/media/media-tracks';
-import { describe, expect, it, vi } from 'vite-plus/test';
+import { describe, expect, it, onTestFinished, vi } from 'vite-plus/test';
 
 import { OpenMoqMediaTracksMixin } from '../media-tracks';
 
@@ -201,21 +201,85 @@ describe('OpenMoqMediaTracksMixin', () => {
     });
   });
 
-  it('ignores a switch that playa rejects, with a warning', async () => {
-    const media = new OpenMoqMediaTracks();
-    const player = load(media);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const cause = new Error('track unavailable');
+  describe('when playa rejects a switch', () => {
+    const cause = new Error('Cannot select a track while a switch is committing');
 
-    player.setQuality.mockRejectedValueOnce(cause);
-    player.loadLevels(LEVELS);
-    media.videoRenditions.selectedIndex = 1;
-    await flush();
-    await flush();
+    function settle(): Promise<void> {
+      return new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
 
-    expect(warn).toHaveBeenCalledWith('[openmoq-video] Failed to switch the video rendition.', cause);
+    function setup() {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    warn.mockRestore();
+      player.loadLevels(LEVELS);
+      onTestFinished(() => warn.mockRestore());
+
+      return { media, player, warn };
+    }
+
+    it('returns to automatic quality when it was in use, with a warning', async () => {
+      const { media, player, warn } = setup();
+
+      player.setQuality.mockRejectedValueOnce(cause);
+      media.videoRenditions.selectedIndex = 1;
+      await settle();
+
+      expect(warn).toHaveBeenCalledWith('[openmoq-video] Failed to switch the video rendition.', cause);
+      expect(media.videoRenditions.selectedIndex).toBe(-1);
+      expect(player.setQuality).toHaveBeenLastCalledWith('auto');
+    });
+
+    it('selects the previous rendition again without switching to it', async () => {
+      const { media, player } = setup();
+
+      media.videoRenditions.selectedIndex = 0;
+      await settle();
+      player.setQuality.mockRejectedValueOnce(cause);
+      media.videoRenditions.selectedIndex = 1;
+      await settle();
+
+      expect(media.videoRenditions.selectedIndex).toBe(0);
+      expect(player.setQuality.mock.calls).toEqual([[0], [1]]);
+    });
+
+    it('returns to automatic quality when the previous rendition is gone', async () => {
+      const { media, player } = setup();
+
+      media.videoRenditions.selectedIndex = 0;
+      await settle();
+      player.levels = [LEVELS[1]!, LEVELS[2]!].map((level, index) => ({ ...level, index }));
+      player.setQuality.mockRejectedValueOnce(cause);
+      media.videoRenditions.selectedIndex = 1;
+      await settle();
+
+      expect(media.videoRenditions.selectedIndex).toBe(-1);
+      expect(player.setQuality).toHaveBeenLastCalledWith('auto');
+    });
+
+    it('keeps a rendition picked while the rejected switch was pending', async () => {
+      const { media, player } = setup();
+      let reject: (reason: Error) => void = () => {};
+
+      player.setQuality.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, rejectSwitch) => {
+            reject = rejectSwitch;
+          })
+      );
+      media.videoRenditions.selectedIndex = 1;
+      await settle();
+      media.videoRenditions.selectedIndex = 2;
+      await settle();
+      reject(cause);
+      await settle();
+
+      expect(media.videoRenditions.selectedIndex).toBe(2);
+      expect(player.setQuality.mock.calls).toEqual([[1], [2]]);
+    });
   });
 
   it('does not switch before playa has levels', () => {

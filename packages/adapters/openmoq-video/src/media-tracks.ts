@@ -1,5 +1,6 @@
 import type { Level, Player } from '@openmoq/playa';
 import type { MediaVideoRenditionCapability, MediaVideoTrackCapability, VideoTrackLike } from '@videojs/media';
+import { noop } from '@videojs/utils/function';
 import type { Constructor } from '@videojs/utils/types';
 
 type OpenMoqEngineHost = EventTarget & {
@@ -24,6 +25,8 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
   class OpenMoqMediaTracks extends (BaseClass as Constructor<MediaTracksHost>) {
     #unsubscribes: (() => void)[] = [];
     #videoTrack: VideoTrackLike | null = null;
+    // Identity of the level last asked of playa, or undefined for auto.
+    #requested: string | undefined;
 
     constructor(...args: any[]) {
       super(...args);
@@ -122,15 +125,42 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       const { engine } = this;
       if (!engine?.levels.length) return;
 
+      const requested = this.videoRenditions[this.videoRenditions.selectedIndex]?.id;
+      if (requested === this.#requested) return;
+
       // Playa renumbers its levels on `catalog_updated` without an event, so the index is looked up at switch time.
-      const picked = this.videoRenditions[this.videoRenditions.selectedIndex];
-      const quality = picked ? engine.levels.findIndex((level) => levelIdentity(level) === picked.id) : 'auto';
+      const quality = requested ? engine.levels.findIndex((level) => levelIdentity(level) === requested) : 'auto';
       if (quality === -1) return;
+
+      const previous = this.#requested;
+
+      this.#requested = requested;
 
       engine.setQuality(quality).catch((cause) => {
         if (__DEV__) console.warn('[openmoq-video] Failed to switch the video rendition.', cause);
+
+        if (engine === this.engine && requested === this.#requested) this.#restoreSelection(engine, previous);
       });
     };
+
+    // A rejected switch leaves playa on the level it was playing, with ABR already turned off. A previous manual pick
+    // is that level, so only the list goes back to it; otherwise ABR is turned back on.
+    #restoreSelection(engine: Player, previous: string | undefined) {
+      const rendition =
+        previous && engine.levels.some((level) => levelIdentity(level) === previous)
+          ? this.videoRenditions.getRenditionById(previous)
+          : null;
+
+      this.#requested = rendition?.id;
+
+      if (rendition) {
+        rendition.selected = true;
+        return;
+      }
+
+      this.videoRenditions.selectedIndex = -1;
+      engine.setQuality('auto').catch(noop);
+    }
 
     #setActiveRendition(level: Level | undefined) {
       const identity = level && levelIdentity(level);
@@ -145,6 +175,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
       this.#unsubscribes = [];
       this.#videoTrack = null;
+      this.#requested = undefined;
       this.#removeVideoTracks();
     };
 
