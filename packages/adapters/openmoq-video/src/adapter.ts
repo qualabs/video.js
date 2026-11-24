@@ -7,8 +7,11 @@ import {
   MediaStreamTypes,
   type Video,
 } from '@videojs/media';
+import { MediaTracksMixin } from '@videojs/media/media-tracks';
 import { noop } from '@videojs/utils/function';
 import { isUndefined } from '@videojs/utils/predicate';
+
+import { OpenMoqMediaTracksMixin } from './media-tracks';
 
 /**
  * Connection fields for one broadcast, passed to the playa `Player` as-is.
@@ -23,8 +26,7 @@ export interface OpenMoqAdapterProps {
   source: OpenMoqSource | null;
 }
 
-/** @internal */
-export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
+class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
   static readonly defaultProps: OpenMoqAdapterProps = {
     src: '',
     source: null,
@@ -37,7 +39,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #canvas: HTMLCanvasElement | null = null;
   #player: Player | null = null;
   #unsubscribes: (() => void)[] = [];
-  #source: OpenMoqSource | null = OpenMoqAdapter.defaultProps.source;
+  #source: OpenMoqSource | null = OpenMoqAdapterCore.defaultProps.source;
   #readyState: MediaReadyStateValue = MediaReadyState.HAVE_NOTHING;
   #playerState: PlayerState | null = null;
   #error: MediaError | null = null;
@@ -302,6 +304,9 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     if (!this.paused) this.dispatchEvent(new Event('playing'));
   }
 }
+
+/** @internal */
+export class OpenMoqAdapter extends OpenMoqMediaTracksMixin(MediaTracksMixin(OpenMoqAdapterCore)) {}
 
 // Playa draws each frame scaled to the canvas bitmap and never resizes it. Assigning a dimension clears the bitmap,
 // even when the value is unchanged.
