@@ -1,11 +1,16 @@
-import { Player } from '@openmoq/playa';
+import { Player, type PlayerEventMap } from '@openmoq/playa';
 import { MediaError } from '@videojs/media';
-import { describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { OpenMoqAdapter, type OpenMoqSource } from '../index';
 
 const SOURCE: OpenMoqSource = { url: 'https://relay.example.com/moq', namespace: 'live' };
 const OTHER_URL = 'https://relay.example.com/other';
+const LIVE_EVENTS = ['loadedmetadata', 'durationchange', 'streamtypechange', 'targetlivewindowchange', 'emptied'];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** Mirrors the host template: the canvas playa may draw into sits beside the video. */
 function setup() {
@@ -23,6 +28,46 @@ function nextEvent(target: EventTarget, type: string): Promise<void> {
   return new Promise((resolve) => {
     target.addEventListener(type, () => resolve(), { once: true });
   });
+}
+
+function recordEvents(target: EventTarget, types: string[]): string[] {
+  const events: string[] = [];
+
+  for (const type of types) target.addEventListener(type, () => events.push(type));
+
+  return events;
+}
+
+function liveValues(media: OpenMoqAdapter) {
+  const { streamType, duration, targetLiveWindow, liveEdgeStart } = media;
+
+  return { streamType, duration, targetLiveWindow, liveEdgeStart };
+}
+
+/** Stubs the relay session out of `load()` and lets a test emit the events playa would. */
+function stubPlaya() {
+  const handlers = new Map<string, (data: never) => void>();
+  const on = Player.prototype.on;
+
+  vi.spyOn(Player.prototype, 'load').mockResolvedValue();
+  vi.spyOn(Player.prototype, 'on').mockImplementation(function (this: Player, event, handler) {
+    handlers.set(event, handler);
+    return on.call(this, event, handler);
+  });
+
+  return <K extends keyof PlayerEventMap>(event: K, data: PlayerEventMap[K]): void => {
+    // SAFETY: The handler stored for `event` was registered by `on(event)`, so it takes this event's payload.
+    handlers.get(event)?.(data as never);
+  };
+}
+
+/** Playa's order up to the catalog: `statechange` to `loading`, then `ready`. */
+async function loadMetadata(media: OpenMoqAdapter, emit: ReturnType<typeof stubPlaya>): Promise<void> {
+  media.source = SOURCE;
+  await nextEvent(media, 'loadstart');
+
+  emit('statechange', { state: 'loading' });
+  emit('ready', { levels: [], audioTracks: [] });
 }
 
 /** Without WebTransport in jsdom, a load fails, or is cut short by destroy, within a task. */
@@ -160,6 +205,99 @@ describe('OpenMoqAdapter', () => {
       await flush();
 
       expect(onError).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('streamType', () => {
+    it('is unknown with every live value NaN before metadata', async () => {
+      stubPlaya();
+
+      const media = setup();
+
+      media.source = SOURCE;
+      await nextEvent(media, 'loadstart');
+
+      expect(liveValues(media)).toEqual({
+        streamType: 'unknown',
+        duration: Number.NaN,
+        targetLiveWindow: Number.NaN,
+        liveEdgeStart: Number.NaN,
+      });
+    });
+
+    it('turns live on metadata, with a live edge at the playback position', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+      await loadMetadata(media, emit);
+
+      expect(events).toEqual(['loadedmetadata', 'durationchange', 'streamtypechange', 'targetlivewindowchange']);
+      expect(liveValues(media)).toEqual({
+        streamType: 'live',
+        duration: Number.POSITIVE_INFINITY,
+        targetLiveWindow: 0,
+        liveEdgeStart: 12.5,
+      });
+    });
+
+    it('fires no change when playa is ready again', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      emit('ready', { levels: [], audioTracks: [] });
+
+      expect(events).toEqual([]);
+    });
+
+    it('resets before emptied when the source is cleared', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      media.source = null;
+
+      expect(events).toEqual(['streamtypechange', 'targetlivewindowchange', 'emptied']);
+      expect(liveValues(media)).toMatchObject({ streamType: 'unknown', targetLiveWindow: Number.NaN });
+    });
+
+    it('resets on detach', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      media.detach();
+
+      expect(events).toEqual(['streamtypechange', 'targetlivewindowchange']);
+      expect(liveValues(media)).toMatchObject({ streamType: 'unknown', targetLiveWindow: Number.NaN });
+    });
+  });
+
+  describe('duration', () => {
+    it('stays Infinity when playa reports a duration', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      vi.spyOn(Player.prototype, 'duration', 'get').mockReturnValue(5_000);
+      emit('durationchange', { duration: 5_000 });
+
+      expect(media.duration).toBe(Number.POSITIVE_INFINITY);
+      expect(events).toEqual([]);
     });
   });
 
