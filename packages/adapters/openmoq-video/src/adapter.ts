@@ -41,6 +41,8 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #readyState: MediaReadyStateValue = MediaReadyState.HAVE_NOTHING;
   #playerState: PlayerState | null = null;
   #error: MediaError | null = null;
+  #volume = 1;
+  #muted = false;
   // Last `play()`/`pause()` call, so a `pause()` while `load()` is in flight wins over an earlier `play()`.
   #wantsPlay = false;
   // Guards async player creation across source changes and attach/detach cycles.
@@ -155,6 +157,48 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     if (this.#player?.state === 'playing') this.#player.pause();
   }
 
+  get volume(): number {
+    return this.#volume;
+  }
+  // Throws as `HTMLMediaElement` does; playa would clamp the level, and its `<video>` throws on a non-finite one.
+  set volume(value: number) {
+    if (!Number.isFinite(value)) throw new TypeError('The provided volume is non-finite.');
+
+    if (value < 0 || value > 1) {
+      throw new DOMException(`The volume provided (${value}) is outside the range [0, 1].`, 'IndexSizeError');
+    }
+
+    if (this.#volume === value) return;
+
+    this.#volume = value;
+
+    if (this.#player) {
+      this.#player.setVolume(value);
+    } else {
+      this.dispatchEvent(new Event('volumechange'));
+    }
+  }
+
+  get muted(): boolean {
+    return this.#muted;
+  }
+  set muted(value: boolean) {
+    if (this.#muted === value) return;
+
+    this.#muted = value;
+
+    const player = this.#player;
+
+    if (!player) {
+      this.dispatchEvent(new Event('volumechange'));
+    } else if (value) {
+      player.mute();
+    } else {
+      // Playa activates LOC audio inside `unmute()`, which must run within the user gesture.
+      player.unmute().catch((cause) => this.#onUnmuteFailed(player, cause));
+    }
+  }
+
   get currentTime(): number {
     return (this.#player?.currentTime ?? 0) / 1000;
   }
@@ -201,7 +245,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     const canvas = this.#canvas;
     if (generation !== this.#generation || !source?.url || !source.namespace || !video || !canvas) return;
 
-    const player = new Player(null, { ...source, video, canvas });
+    const player = new Player(null, { ...source, video, canvas, volume: this.#volume, muted: this.#muted });
 
     this.#player = player;
     this.#unsubscribes = [
@@ -212,6 +256,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
       player.on('playing', () => this.#onPlaying()),
       player.on('timeupdate', () => this.dispatchEvent(new Event('timeupdate'))),
       player.on('durationchange', () => this.dispatchEvent(new Event('durationchange'))),
+      player.on('volumechange', ({ volume, muted }) => this.#onVolumeChange(volume, muted)),
       player.on('statechange', ({ state }) => this.#onStateChange(state)),
       player.on('ended', () => this.dispatchEvent(new Event('ended'))),
       player.on('error', ({ severity, code, message }) => this.#onError(severity, code, message)),
@@ -280,6 +325,22 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
     error.data = { playaErrorCode: code };
     this.#fail(error);
+  }
+
+  // Playa settles `unmute()` asynchronously, so its report is the state that holds.
+  #onVolumeChange(volume: number, muted: boolean): void {
+    this.#volume = volume;
+    this.#muted = muted;
+    this.dispatchEvent(new Event('volumechange'));
+  }
+
+  #onUnmuteFailed(player: Player, cause: unknown): void {
+    if (player !== this.#player) return;
+
+    if (__DEV__) console.warn('[openmoq-video] Failed to start audio on unmute.', cause);
+
+    this.#muted = player.muted;
+    this.dispatchEvent(new Event('volumechange'));
   }
 
   #onPlay(): void {
