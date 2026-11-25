@@ -1,5 +1,7 @@
-import type { Level, Player } from '@openmoq/playa';
+import type { AudioTrack, Level, Player } from '@openmoq/playa';
 import type {
+  AudioTrackLike,
+  MediaAudioTrackCapability,
   MediaVideoRenditionCapability,
   MediaVideoTrackCapability,
   VideoRenditionLike,
@@ -14,11 +16,14 @@ type OpenMoqEngineHost = EventTarget & {
   destroy(): void;
 };
 
-type MediaTracksHost = OpenMoqEngineHost & MediaVideoTrackCapability & MediaVideoRenditionCapability;
+type MediaTracksHost = OpenMoqEngineHost &
+  MediaVideoTrackCapability &
+  MediaAudioTrackCapability &
+  MediaVideoRenditionCapability;
 
 /**
- * Mirrors playa levels into `videoRenditions` under one `main` track; selection goes to `setQuality()`. Needs
- * `MediaTracksMixin` earlier in the chain.
+ * Mirrors playa levels into `videoRenditions` under one `main` track and its audio tracks into `audioTracks`; selection
+ * goes to `setQuality()`. Needs `MediaTracksMixin` earlier in the chain.
  */
 export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost>>(BaseClass: Base) {
   class OpenMoqMediaTracks extends (BaseClass as Constructor<MediaTracksHost>) {
@@ -62,6 +67,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#unsubscribes = [
         engine.on('levelsloaded', ({ levels }) => this.#mirrorLevels(levels)),
         engine.on('qualitychange', ({ level }) => this.#onQualityChange(engine, level)),
+        engine.on('audiochange', () => this.#onAudioChange(engine)),
       ];
     };
 
@@ -74,8 +80,10 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     // playa's levelsloaded comes after the host's loadedmetadata
     #onLoadedMetadata = () => {
       const { engine } = this;
+      if (!engine) return;
 
-      if (engine) this.#mirrorLevels(engine.levels);
+      this.#mirrorLevels(engine.levels);
+      this.#mirrorAudioTracks(engine);
     };
 
     // list only keeps insertion order: re-add from the first mismatch on, carrying `selected` by identity
@@ -170,6 +178,40 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       }
     }
 
+    // playa swaps audioTracks on catalog_updated/selection_changed w/o event; re-read before marking
+    #onAudioChange(engine: Player) {
+      this.#mirrorAudioTracks(engine);
+    }
+
+    #mirrorAudioTracks(engine: Player) {
+      const tracks = engine.audioTracks;
+      const audioTracks = [...this.audioTracks];
+      const unchanged =
+        audioTracks.length === tracks.length &&
+        audioTracks.every((audioTrack, index) => matchesAudioTrack(audioTrack, tracks[index]));
+
+      if (!unchanged) {
+        this.#removeAudioTracks();
+
+        for (const track of tracks) {
+          const audioTrack = this.addAudioTrack('main', track.label, track.language ?? '');
+
+          audioTrack.id = track.id;
+        }
+      }
+
+      this.#markEnabledAudioTrack(engine);
+    }
+
+    // currentAudioTrack is -1 until the first audiochange
+    #markEnabledAudioTrack(engine: Player) {
+      const id = engine.audioTracks[engine.currentAudioTrack]?.id;
+
+      for (const audioTrack of this.audioTracks) {
+        audioTrack.enabled = id !== undefined && audioTrack.id === id;
+      }
+    }
+
     #reset = () => {
       for (const unsubscribe of this.#unsubscribes) unsubscribe();
 
@@ -177,6 +219,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#videoTrack = null;
       this.#requested = undefined;
       this.#removeVideoTracks();
+      this.#removeAudioTracks();
     };
 
     // removeVideoTrack only fires removetrack; remove renditions first
@@ -186,6 +229,10 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
         this.removeVideoTrack(videoTrack);
       }
+    }
+
+    #removeAudioTracks() {
+      for (const audioTrack of [...this.audioTracks]) this.removeAudioTrack(audioTrack);
     }
   }
 
@@ -228,4 +275,12 @@ function addRendition(videoTrack: VideoTrackLike, level: Level): VideoRenditionL
   rendition.id = id;
 
   return rendition;
+}
+
+function matchesAudioTrack(audioTrack: AudioTrackLike, track: AudioTrack | undefined): boolean {
+  if (!track) return false;
+
+  return (
+    audioTrack.id === track.id && audioTrack.label === track.label && audioTrack.language === (track.language ?? '')
+  );
 }

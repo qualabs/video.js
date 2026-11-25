@@ -1,4 +1,4 @@
-import type { Level, Player, PlayerEventMap } from '@openmoq/playa';
+import type { AudioTrack, Level, Player, PlayerEventMap } from '@openmoq/playa';
 import { MediaTracksMixin } from '@videojs/media/media-tracks';
 import { describe, expect, it, onTestFinished, vi } from 'vite-plus/test';
 
@@ -30,9 +30,29 @@ const LEVELS: Level[] = [
   createLevel(2, 'video-unsized', { codec: 'avc1.42e01e' }),
 ];
 
+function createAudioTrack(index: number, trackName: string, attributes: Partial<AudioTrack> = {}): AudioTrack {
+  return {
+    index,
+    trackName,
+    id: trackId(trackName),
+    namespace: ['live'],
+    label: `Audio ${index + 1}`,
+    codec: 'opus',
+    ...attributes,
+  };
+}
+
+const AUDIO_TRACKS: AudioTrack[] = [
+  createAudioTrack(0, 'audio-en', { label: 'English', language: 'en' }),
+  createAudioTrack(1, 'audio-es', { label: 'Español', language: 'es' }),
+  createAudioTrack(2, 'audio-commentary'),
+];
+
 class FakePlayer {
   levels: Level[] = [];
   currentLevel = -1;
+  audioTracks: AudioTrack[] = [];
+  currentAudioTrack = -1;
   setQuality = vi.fn(async (_level: number | 'auto') => {});
   #listeners = new Map<string, Set<(data: any) => void>>();
 
@@ -58,6 +78,13 @@ class FakePlayer {
   switchTo(level: Level): void {
     this.currentLevel = level.index;
     this.emit('qualitychange', { level, auto: false });
+  }
+
+  /** Playa sets audioTracks and currentAudioTrack before audiochange */
+  adoptAudio(id: string | undefined, audioTracks = this.audioTracks): void {
+    this.audioTracks = audioTracks;
+    this.currentAudioTrack = audioTracks.findIndex((track) => track.id === id);
+    this.emit('audiochange', { track: audioTracks[this.currentAudioTrack]! });
   }
 }
 
@@ -97,6 +124,20 @@ function settle(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+// the host dispatches loadedmetadata on playa's ready, before the first audio is adopted
+function loadAudioTracks(
+  media: InstanceType<typeof OpenMoqMediaTracks>,
+  player: FakePlayer,
+  audioTracks = AUDIO_TRACKS
+): void {
+  player.audioTracks = audioTracks;
+  media.dispatchEvent(new Event('loadedmetadata'));
+}
+
+function enabledAudioTracks(media: InstanceType<typeof OpenMoqMediaTracks>): (string | undefined)[] {
+  return [...media.audioTracks].filter((audioTrack) => audioTrack.enabled).map(({ id }) => id);
 }
 
 describe('OpenMoqMediaTracksMixin', () => {
@@ -537,15 +578,118 @@ describe('OpenMoqMediaTracksMixin', () => {
     ['emptied', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.dispatchEvent(new Event('emptied'))],
     ['detach', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.detach()],
     ['destroy', (media: InstanceType<typeof OpenMoqMediaTracks>) => media.destroy()],
-  ])('clears the list and stops listening to the previous Player on %s', (_type, replace) => {
+  ])('clears the lists and stops listening to the previous Player on %s', (_type, replace) => {
     const media = new OpenMoqMediaTracks();
     const player = load(media);
 
     player.loadLevels(LEVELS);
+    loadAudioTracks(media, player);
     replace(media);
     player.loadLevels(LEVELS);
+    player.adoptAudio(AUDIO_TRACKS[0]!.id);
 
     expect(media.videoTracks.length).toBe(0);
     expect(media.videoRenditions.length).toBe(0);
+    expect(media.audioTracks.length).toBe(0);
+  });
+
+  describe('audioTracks', () => {
+    it('lists playa audio tracks on loadedmetadata as main tracks, none enabled before the first adoption', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+
+      expect(
+        [...media.audioTracks].map(({ id, kind, label, language, enabled }) => ({ id, kind, label, language, enabled }))
+      ).toEqual([
+        { id: trackId('audio-en'), kind: 'main', label: 'English', language: 'en', enabled: false },
+        { id: trackId('audio-es'), kind: 'main', label: 'Español', language: 'es', enabled: false },
+        { id: trackId('audio-commentary'), kind: 'main', label: 'Audio 3', language: '', enabled: false },
+      ]);
+    });
+
+    it('enables the track playa adopts first', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[1]!.id);
+
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-es')]);
+    });
+
+    it('enables the playing track when it is already adopted at loadedmetadata', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      player.currentAudioTrack = 1;
+      loadAudioTracks(media, player);
+
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-es')]);
+    });
+
+    it('keeps the tracks when playa adopts audio from the same set', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+
+      const audioTracks = [...media.audioTracks];
+
+      player.adoptAudio(
+        AUDIO_TRACKS[0]!.id,
+        AUDIO_TRACKS.map((track) => ({ ...track }))
+      );
+
+      expect([...media.audioTracks].every((audioTrack, index) => audioTrack === audioTracks[index])).toBe(true);
+    });
+
+    it('re-reads tracks playa replaced without an announcement before enabling the adopted one', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+      const updated = [
+        createAudioTrack(0, 'audio-fr', { label: 'Français', language: 'fr' }),
+        ...AUDIO_TRACKS.map((track) => ({ ...track, index: track.index + 1 })),
+      ];
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      player.adoptAudio(updated[1]!.id, updated);
+
+      expect([...media.audioTracks].map(({ label, enabled }) => ({ label, enabled }))).toEqual([
+        { label: 'Français', enabled: false },
+        { label: 'English', enabled: true },
+        { label: 'Español', enabled: false },
+        { label: 'Audio 3', enabled: false },
+      ]);
+    });
+
+    it.each([
+      ['label', { label: 'Spanish' }],
+      ['language', { language: 'es-AR' }],
+    ])('refreshes the %s of a track that keeps its identity', (_attribute, attributes) => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+      const updated = { ...AUDIO_TRACKS[1]!, ...attributes };
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id, [AUDIO_TRACKS[0]!, updated, AUDIO_TRACKS[2]!]);
+
+      expect(media.audioTracks[1]).toMatchObject({ label: updated.label, language: updated.language });
+    });
+
+    it('announces the tracks it removes', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+      const onRemoveTrack = vi.fn();
+
+      loadAudioTracks(media, player);
+      media.audioTracks.addEventListener('removetrack', onRemoveTrack);
+      media.dispatchEvent(new Event('emptied'));
+      await flush();
+
+      expect(onRemoveTrack).toHaveBeenCalledTimes(AUDIO_TRACKS.length);
+    });
   });
 });
