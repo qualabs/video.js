@@ -1022,6 +1022,20 @@ describe('CustomMediaElement', () => {
       expect(el.adapter.calls).toEqual(['set:muted:true']);
     });
 
+    it('muted setter reaches the native video after a mute through native controls', () => {
+      const tag = `test-video-${++tagCounter}`;
+      const Ctor = CustomMediaElement('video', HTMLVideoAdapter);
+
+      customElements.define(tag, Ctor);
+      const el = create({ Ctor, tag });
+      const video: HTMLVideoElement = el.target;
+
+      video.muted = true;
+      el.muted = false;
+
+      expect(video.muted).toBe(false);
+    });
+
     it('muted setter writes the PlaybackAdapter once per change', () => {
       const el = create(defineTrackingVideoElement());
 
