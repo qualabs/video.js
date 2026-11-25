@@ -217,7 +217,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       }
     }
 
-    // pending pick, else the playing track; currentAudioTrack is -1 until the first audiochange
+    // currentAudioTrack is -1 until the first audiochange
     #currentAudioTrackId(engine: Player): string | undefined {
       return this.#requestedAudio ?? engine.audioTracks[engine.currentAudioTrack]?.id;
     }
@@ -227,7 +227,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       if (!engine) return;
 
       const current = this.#currentAudioTrackId(engine);
-      // enabled isn't exclusive: a newly enabled track wins; none = nothing changed (e.g. safari's native change)
+      // enabled isn't exclusive: a newly enabled track wins; none = nothing changed (e.g. our own re-mark)
       const picked = [...this.audioTracks].find(
         (audioTrack) => audioTrack.enabled && audioTrack.id && audioTrack.id !== current
       );
@@ -243,7 +243,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#requestedAudio = requested;
       this.#markEnabledAudioTrack(engine);
 
-      // fails w/o a shared altGroup (msf switching sets, @openmoq/player player.js:5960-5963)
+      // fails w/o a shared altGroup (msf switching sets, @openmoq/player player.js:5961-5963)
       engine.selectAudioTrack(requested).catch((cause) => {
         if (__DEV__) console.warn('[openmoq-video] Failed to switch the audio track.', cause);
 
