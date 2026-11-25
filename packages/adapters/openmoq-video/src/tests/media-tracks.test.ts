@@ -816,7 +816,7 @@ describe('OpenMoqMediaTracksMixin', () => {
       expect(player.selectAudioTrack).toHaveBeenCalledTimes(1);
     });
 
-    it('does not switch on a change that enables no other track', async () => {
+    it('re-enables the playing track on a change that enables no other track, without switching', async () => {
       const media = new OpenMoqMediaTracks();
       const player = load(media);
 
@@ -827,10 +827,11 @@ describe('OpenMoqMediaTracksMixin', () => {
       media.audioTracks[0]!.enabled = false;
       await settle();
 
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-en')]);
       expect(player.selectAudioTrack).not.toHaveBeenCalled();
     });
 
-    it('ignores a pick of a track without a playa id, and still follows the next pick', async () => {
+    it('re-enables the playing track on a pick of a track without a playa id, and still follows the next pick', async () => {
       const media = new OpenMoqMediaTracks();
       const player = load(media);
       // playa leaves id, trackName and namespace out while the namespace is unresolved
@@ -845,8 +846,10 @@ describe('OpenMoqMediaTracksMixin', () => {
       await settle();
 
       expect(media.audioTracks[1]?.id).toBeUndefined();
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-en')]);
       expect(player.selectAudioTrack).not.toHaveBeenCalled();
 
+      media.audioTracks[1]!.enabled = true;
       media.audioTracks[2]!.enabled = true;
       await settle();
 

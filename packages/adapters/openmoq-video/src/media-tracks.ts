@@ -227,12 +227,16 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       if (!engine) return;
 
       const current = this.#currentAudioTrackId(engine);
-      // enabled isn't exclusive: a newly enabled track wins; none = nothing changed (e.g. our own re-mark)
+      // enabled isn't exclusive: a newly enabled track wins; none = re-mark, playa can't mute or pick id-less
       const picked = [...this.audioTracks].find(
         (audioTrack) => audioTrack.enabled && audioTrack.id && audioTrack.id !== current
       );
       const requested = picked?.id;
-      if (!requested) return;
+
+      if (!requested) {
+        this.#markEnabledAudioTrack(engine);
+        return;
+      }
 
       // playa swaps audioTracks w/o event; a dropped pick gets re-read away
       if (!engine.audioTracks.some((track) => track.id === requested)) {
