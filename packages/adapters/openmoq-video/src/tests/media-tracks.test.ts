@@ -697,6 +697,17 @@ describe('OpenMoqMediaTracksMixin', () => {
       ]);
     });
 
+    it('re-reads tracks playa replaced without an announcement when it announces its levels', () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.audioTracks = [AUDIO_TRACKS[1]!].map((track, index) => ({ ...track, index }));
+      player.loadLevels(LEVELS);
+
+      expect([...media.audioTracks].map(({ id }) => id)).toEqual([trackId('audio-es')]);
+    });
+
     it.each([
       ['label', { label: 'Spanish' }],
       ['language', { language: 'es-AR' }],

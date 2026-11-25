@@ -70,6 +70,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
       this.#unsubscribes = [
         engine.on('levelsloaded', ({ levels }) => this.#mirrorLevels(levels)),
+        engine.on('levelsloaded', () => this.#mirrorAudioTracks(engine)),
         engine.on('qualitychange', ({ level }) => this.#onQualityChange(engine, level)),
         engine.on('audiochange', () => this.#onAudioChange(engine)),
       ];
