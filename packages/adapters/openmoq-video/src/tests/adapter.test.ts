@@ -243,6 +243,30 @@ describe('OpenMoqAdapter', () => {
       });
     });
 
+    it.each([
+      { from: 'playing', events: ['timeupdate', 'pause', 'ended'] },
+      { from: 'paused', events: ['timeupdate', 'ended'] },
+    ] as const)('has no live edge once playa ends while $from', async ({ from, events: expected }) => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+      emit('statechange', { state: from });
+
+      const events = recordEvents(media, ['timeupdate', 'pause', 'ended']);
+
+      emit('statechange', { state: 'ended' });
+      emit('ended', {});
+
+      expect(events).toEqual(expected);
+      expect(liveValues(media)).toEqual({
+        streamType: 'live',
+        duration: Number.POSITIVE_INFINITY,
+        targetLiveWindow: 0,
+        liveEdgeStart: Number.NaN,
+      });
+    });
+
     it('fires no change when playa is ready again', async () => {
       const emit = stubPlaya();
       const media = setup();

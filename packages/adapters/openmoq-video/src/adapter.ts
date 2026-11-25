@@ -139,7 +139,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   }
 
   get liveEdgeStart(): number {
-    return this.streamType === MediaStreamTypes.LIVE ? this.currentTime : Number.NaN;
+    return this.streamType === MediaStreamTypes.LIVE && !this.ended ? this.currentTime : Number.NaN;
   }
 
   get error(): MediaError | null {
@@ -272,13 +272,17 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.dispatchEvent(new Event('targetlivewindowchange'));
   }
 
-  // Playa reaches `ended` straight from `playing` without a `pause`, which a media element fires before `ended`.
+  // Playa reaches `ended` without the `timeupdate` and `pause` (when playing) a media element fires before `ended`.
   #onStateChange(state: PlayerState): void {
     const previous = this.#playerState;
 
     this.#playerState = state;
 
-    if (state === 'ended' && previous === 'playing') this.dispatchEvent(new Event('pause'));
+    if (state !== 'ended') return;
+
+    this.dispatchEvent(new Event('timeupdate'));
+
+    if (previous === 'playing') this.dispatchEvent(new Event('pause'));
   }
 
   // Only a fatal error stops playback; playa keeps going after a recoverable one.
