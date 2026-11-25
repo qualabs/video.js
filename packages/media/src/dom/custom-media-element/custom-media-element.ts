@@ -120,6 +120,16 @@ function isAttributeAlias(prop: string, properties: PropertyConfigs, hostPrototy
   return !!attribute && attribute in hostPrototype;
 }
 
+/**
+ * Whether a property's attribute is another property's default rather than its own state.
+ *
+ * For example: `muted` owns the `muted` attribute, but `defaultMuted` declares it, so the adapter's live `muted` can
+ * move on from the attribute.
+ */
+function isAttributeDefault(prop: string, attr: string, properties: PropertyConfigs): boolean {
+  return Object.entries(properties).some(([other, { attribute }]) => other !== prop && attribute === attr);
+}
+
 /** Coerce an attribute string to the type the adapter property already holds. */
 function propertyValueFor(attrValue: string | null, current: unknown, config?: PropertyConfig): unknown {
   if (typeof current === 'boolean') return attrValue !== null;
@@ -234,12 +244,23 @@ export function CustomMediaElement<T extends Constructor<PlaybackAdapter>>(
               if (ctor.observedAttributes.includes(attr)) {
                 mediaHostAttrToProp.set(attr, prop);
 
+                const canDiverge = isAttributeDefault(prop, attr, properties);
+
                 config.set = function (this: CustomMedia, val: any) {
+                  const previous = this.getAttribute(attr);
+
                   if (val === true || val === false || val == null) {
                     this.toggleAttribute(attr, Boolean(val));
                   } else {
                     this.setAttribute(attr, String(val));
                   }
+
+                  // An unchanged attribute runs no callback, yet the adapter may have moved on from it.
+                  if (!canDiverge || this.getAttribute(attr) !== previous) return;
+
+                  const value = propertyValueFor(previous, this.#mediaHost[prop], properties[prop]);
+
+                  if (this.#mediaHost[prop] !== value) this.#mediaHost[prop] = value;
                 };
               } else {
                 config.set = function (this: CustomMedia, val: any) {

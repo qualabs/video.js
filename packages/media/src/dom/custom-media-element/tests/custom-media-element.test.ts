@@ -1000,6 +1000,52 @@ describe('CustomMediaElement', () => {
       el.defaultMuted = false;
       expect(el.muted).toBe(false);
     });
+
+    it('muted setter reaches a PlaybackAdapter that diverged from the muted attribute', () => {
+      const el = create(defineTrackingVideoElement());
+
+      el.adapter.muted = true;
+      el.adapter.calls.length = 0;
+      el.muted = false;
+
+      expect(el.hasAttribute('muted')).toBe(false);
+      expect(el.muted).toBe(false);
+      expect(el.adapter.calls).toEqual(['set:muted:false']);
+
+      el.muted = true;
+      el.adapter.muted = false;
+      el.adapter.calls.length = 0;
+      el.muted = true;
+
+      expect(el.hasAttribute('muted')).toBe(true);
+      expect(el.muted).toBe(true);
+      expect(el.adapter.calls).toEqual(['set:muted:true']);
+    });
+
+    it('muted setter reaches the native video after a mute through native controls', () => {
+      const tag = `test-video-${++tagCounter}`;
+      const Ctor = CustomMediaElement('video', HTMLVideoAdapter);
+
+      customElements.define(tag, Ctor);
+      const el = create({ Ctor, tag });
+      const video: HTMLVideoElement = el.target;
+
+      video.muted = true;
+      el.muted = false;
+
+      expect(video.muted).toBe(false);
+    });
+
+    it('muted setter writes the PlaybackAdapter once per change', () => {
+      const el = create(defineTrackingVideoElement());
+
+      el.muted = true;
+      el.muted = true;
+      el.muted = false;
+      el.muted = false;
+
+      expect(el.adapter.calls).toEqual(['set:muted:true', 'set:muted:false']);
+    });
   });
 
   describe('initial attribute forwarding', () => {
