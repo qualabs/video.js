@@ -327,6 +327,21 @@ describe('OpenMoqAdapter', () => {
   });
 
   describe('pause', () => {
+    it('fires timeupdate before pause, as a media element does', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+      emit('statechange', { state: 'playing' });
+
+      const events = recordEvents(media, ['timeupdate', 'pause']);
+
+      emit('statechange', { state: 'paused' });
+      emit('pause', {});
+
+      expect(events).toEqual(['timeupdate', 'pause']);
+    });
+
     it('leaves a Player that is still loading alone', async () => {
       const media = setup();
 

@@ -214,7 +214,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
       player.on('ready', () => this.#onReady(player, video, canvas)),
       player.on('qualitychange', ({ level }) => sizeCanvas(canvas, level)),
       player.on('play', () => this.#onPlay()),
-      player.on('pause', () => this.dispatchEvent(new Event('pause'))),
+      player.on('pause', () => this.#onPause()),
       player.on('playing', () => this.#onPlaying()),
       player.on('timeupdate', () => this.dispatchEvent(new Event('timeupdate'))),
       player.on('statechange', ({ state }) => this.#onStateChange(state)),
@@ -299,6 +299,12 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.dispatchEvent(new Event('play'));
 
     if (this.#readyState >= MediaReadyState.HAVE_FUTURE_DATA) this.dispatchEvent(new Event('playing'));
+  }
+
+  // Playa emits no `timeupdate` with `pause`, which a media element fires just before it.
+  #onPause(): void {
+    this.dispatchEvent(new Event('timeupdate'));
+    this.dispatchEvent(new Event('pause'));
   }
 
   // Playa reports its first rendered frame, which the MSE path presents before `play()`. Starting after it is announced
