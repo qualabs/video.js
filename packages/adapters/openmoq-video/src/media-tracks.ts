@@ -23,7 +23,7 @@ type MediaTracksHost = OpenMoqEngineHost &
 
 /**
  * Mirrors playa levels into `videoRenditions` under one `main` track and its audio tracks into `audioTracks`; selection
- * goes to `setQuality()`. Needs `MediaTracksMixin` earlier in the chain.
+ * goes to `setQuality()` / `selectAudioTrack()`. Needs `MediaTracksMixin` earlier in the chain.
  */
 export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost>>(BaseClass: Base) {
   class OpenMoqMediaTracks extends (BaseClass as Constructor<MediaTracksHost>) {
@@ -31,6 +31,8 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
     #videoTrack: VideoTrackLike | null = null;
     // level identity last sent to playa; undefined = auto
     #requested: string | undefined;
+    // audio track id sent to playa and not yet adopted or failed
+    #requestedAudio: string | undefined;
 
     constructor(...args: any[]) {
       super(...args);
@@ -40,6 +42,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.addEventListener('loadeddata', this.#seedActiveRendition);
       this.addEventListener('emptied', this.#reset);
       this.videoRenditions.addEventListener('change', this.#switchRendition);
+      this.audioTracks.addEventListener('change', this.#switchAudioTrack);
     }
 
     detach() {
@@ -54,6 +57,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.removeEventListener('loadeddata', this.#seedActiveRendition);
       this.removeEventListener('emptied', this.#reset);
       this.videoRenditions.removeEventListener('change', this.#switchRendition);
+      this.audioTracks.removeEventListener('change', this.#switchAudioTrack);
 
       super.destroy();
     }
@@ -180,6 +184,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
 
     // playa swaps audioTracks on catalog_updated/selection_changed w/o event; re-read before marking
     #onAudioChange(engine: Player) {
+      this.#requestedAudio = undefined;
       this.#mirrorAudioTracks(engine);
     }
 
@@ -203,13 +208,52 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#markEnabledAudioTrack(engine);
     }
 
-    // currentAudioTrack is -1 until the first audiochange
     #markEnabledAudioTrack(engine: Player) {
-      const id = engine.audioTracks[engine.currentAudioTrack]?.id;
+      const id = this.#currentAudioTrackId(engine);
 
       for (const audioTrack of this.audioTracks) {
         audioTrack.enabled = id !== undefined && audioTrack.id === id;
       }
+    }
+
+    // pending pick, else the playing track; currentAudioTrack is -1 until the first audiochange
+    #currentAudioTrackId(engine: Player): string | undefined {
+      return this.#requestedAudio ?? engine.audioTracks[engine.currentAudioTrack]?.id;
+    }
+
+    #switchAudioTrack = () => {
+      const { engine } = this;
+      if (!engine) return;
+
+      const current = this.#currentAudioTrackId(engine);
+      // enabled isn't exclusive: a newly enabled track wins; none = nothing changed (e.g. safari's native change)
+      const picked = [...this.audioTracks].find(
+        (audioTrack) => audioTrack.enabled && audioTrack.id && audioTrack.id !== current
+      );
+      const requested = picked?.id;
+      if (!requested) return;
+
+      // playa swaps audioTracks w/o event; a dropped pick gets re-read away
+      if (!engine.audioTracks.some((track) => track.id === requested)) {
+        this.#mirrorAudioTracks(engine);
+        return;
+      }
+
+      this.#requestedAudio = requested;
+      this.#markEnabledAudioTrack(engine);
+
+      // fails w/o a shared altGroup (msf switching sets, @openmoq/player player.js:5960-5963)
+      engine.selectAudioTrack(requested).catch((cause) => {
+        if (__DEV__) console.warn('[openmoq-video] Failed to switch the audio track.', cause);
+
+        if (engine === this.engine && requested === this.#requestedAudio) this.#restoreAudioTrack(engine);
+      });
+    };
+
+    // failed switch: playa stays on the playing track
+    #restoreAudioTrack(engine: Player) {
+      this.#requestedAudio = undefined;
+      this.#markEnabledAudioTrack(engine);
     }
 
     #reset = () => {
@@ -218,6 +262,7 @@ export function OpenMoqMediaTracksMixin<Base extends Constructor<MediaTracksHost
       this.#unsubscribes = [];
       this.#videoTrack = null;
       this.#requested = undefined;
+      this.#requestedAudio = undefined;
       this.#removeVideoTracks();
       this.#removeAudioTracks();
     };

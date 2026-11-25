@@ -54,6 +54,8 @@ class FakePlayer {
   audioTracks: AudioTrack[] = [];
   currentAudioTrack = -1;
   setQuality = vi.fn(async (_level: number | 'auto') => {});
+  // playa emits audiochange before it resolves
+  selectAudioTrack = vi.fn(async (id: string) => this.adoptAudio(id));
   #listeners = new Map<string, Set<(data: any) => void>>();
 
   on<K extends keyof PlayerEventMap>(event: K, handler: (data: PlayerEventMap[K]) => void): () => void {
@@ -85,6 +87,31 @@ class FakePlayer {
     this.audioTracks = audioTracks;
     this.currentAudioTrack = audioTracks.findIndex((track) => track.id === id);
     this.emit('audiochange', { track: audioTracks[this.currentAudioTrack]! });
+  }
+
+  /** Playa emits audiochangefailed before it rejects */
+  rejectNextAudioSwitch(cause: Error): void {
+    this.selectAudioTrack.mockImplementationOnce(async (trackId: string) => {
+      this.emit('audiochangefailed', { trackId, message: cause.message });
+      throw cause;
+    });
+  }
+
+  pendNextAudioSwitch() {
+    const pending = { resolve: () => {}, reject: (_cause: Error) => {} };
+
+    this.selectAudioTrack.mockImplementationOnce(
+      (id: string) =>
+        new Promise<void>((resolve, reject) => {
+          pending.resolve = () => {
+            this.adoptAudio(id);
+            resolve();
+          };
+          pending.reject = reject;
+        })
+    );
+
+    return pending;
   }
 }
 
@@ -134,6 +161,11 @@ function loadAudioTracks(
 ): void {
   player.audioTracks = audioTracks;
   media.dispatchEvent(new Event('loadedmetadata'));
+}
+
+// as the store does: writes every track
+function enableAudioTrack(media: InstanceType<typeof OpenMoqMediaTracks>, index: number): void {
+  for (const [trackIndex, audioTrack] of [...media.audioTracks].entries()) audioTrack.enabled = trackIndex === index;
 }
 
 function enabledAudioTracks(media: InstanceType<typeof OpenMoqMediaTracks>): (string | undefined)[] {
@@ -679,6 +711,118 @@ describe('OpenMoqMediaTracksMixin', () => {
       expect(media.audioTracks[1]).toMatchObject({ label: updated.label, language: updated.language });
     });
 
+    it('switches with the playa id of the enabled track, and keeps it enabled after the adoption', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      enableAudioTrack(media, 1);
+      await settle();
+
+      expect(player.selectAudioTrack.mock.calls).toEqual([[trackId('audio-es')]]);
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-es')]);
+    });
+
+    it('switches to a track enabled next to the playing one, and disables the playing one', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      media.audioTracks[2]!.enabled = true;
+      await settle();
+
+      expect(player.selectAudioTrack.mock.calls).toEqual([[trackId('audio-commentary')]]);
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-commentary')]);
+    });
+
+    it('keeps the requested track enabled while the switch is pending, without requesting it again', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      player.pendNextAudioSwitch();
+      enableAudioTrack(media, 1);
+      await settle();
+      media.audioTracks.dispatchEvent(new Event('change'));
+      await settle();
+
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-es')]);
+      expect(player.selectAudioTrack).toHaveBeenCalledTimes(1);
+    });
+
+    it('enables the track playa adopts while a switch is pending, without switching again', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      player.pendNextAudioSwitch();
+      enableAudioTrack(media, 1);
+      await settle();
+      player.adoptAudio(AUDIO_TRACKS[2]!.id);
+      await settle();
+
+      expect(enabledAudioTracks(media)).toEqual([trackId('audio-commentary')]);
+      expect(player.selectAudioTrack).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not switch on a change that enables no other track', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      await settle();
+      media.audioTracks.dispatchEvent(new Event('change'));
+      media.audioTracks[0]!.enabled = false;
+      await settle();
+
+      expect(player.selectAudioTrack).not.toHaveBeenCalled();
+    });
+
+    it('ignores a pick of a track without a playa id, and still follows the next pick', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+      // playa leaves id, trackName and namespace out while the namespace is unresolved
+      const unresolved: AudioTrack = { index: 1, label: 'Audio 2', codec: 'opus' };
+
+      loadAudioTracks(media, player, [AUDIO_TRACKS[0]!, unresolved, { ...AUDIO_TRACKS[1]!, index: 2 }]);
+
+      expect(enabledAudioTracks(media)).toEqual([]);
+
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      media.audioTracks[1]!.enabled = true;
+      await settle();
+
+      expect(media.audioTracks[1]?.id).toBeUndefined();
+      expect(player.selectAudioTrack).not.toHaveBeenCalled();
+
+      media.audioTracks[2]!.enabled = true;
+      await settle();
+
+      expect(player.selectAudioTrack.mock.calls).toEqual([[trackId('audio-es')]]);
+    });
+
+    it('refuses a pick playa already dropped: keeps the playing track and drops the pick from the list', async () => {
+      const media = new OpenMoqMediaTracks();
+      const player = load(media);
+
+      loadAudioTracks(media, player);
+      player.adoptAudio(AUDIO_TRACKS[0]!.id);
+      player.audioTracks = [AUDIO_TRACKS[0]!, { ...AUDIO_TRACKS[2]!, index: 1 }];
+      enableAudioTrack(media, 1);
+      await settle();
+
+      expect([...media.audioTracks].map(({ id, enabled }) => ({ id, enabled }))).toEqual([
+        { id: trackId('audio-en'), enabled: true },
+        { id: trackId('audio-commentary'), enabled: false },
+      ]);
+      expect(player.selectAudioTrack).not.toHaveBeenCalled();
+    });
+
     it('announces the tracks it removes', async () => {
       const media = new OpenMoqMediaTracks();
       const player = load(media);
@@ -690,6 +834,71 @@ describe('OpenMoqMediaTracksMixin', () => {
       await flush();
 
       expect(onRemoveTrack).toHaveBeenCalledTimes(AUDIO_TRACKS.length);
+    });
+
+    describe('when playa rejects a switch', () => {
+      const cause = new Error('Audio timelines have no proven relationship; an explicit timeline mapping is required');
+
+      function setup() {
+        const media = new OpenMoqMediaTracks();
+        const player = load(media);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        loadAudioTracks(media, player);
+        player.adoptAudio(AUDIO_TRACKS[0]!.id);
+        onTestFinished(() => warn.mockRestore());
+
+        return { media, player, warn };
+      }
+
+      it('enables the playing track again, with a warning, without switching to it', async () => {
+        const { media, player, warn } = setup();
+
+        player.rejectNextAudioSwitch(cause);
+        enableAudioTrack(media, 1);
+        await settle();
+
+        expect(warn).toHaveBeenCalledWith('[openmoq-video] Failed to switch the audio track.', cause);
+        expect(enabledAudioTracks(media)).toEqual([trackId('audio-en')]);
+        expect(player.selectAudioTrack.mock.calls).toEqual([[trackId('audio-es')]]);
+      });
+
+      it('keeps a track picked while the rejected switch was pending', async () => {
+        const { media, player } = setup();
+        const pending = player.pendNextAudioSwitch();
+
+        enableAudioTrack(media, 1);
+        await settle();
+        player.pendNextAudioSwitch();
+        enableAudioTrack(media, 2);
+        await settle();
+        pending.reject(cause);
+        await settle();
+
+        expect(enabledAudioTracks(media)).toEqual([trackId('audio-commentary')]);
+        expect(player.selectAudioTrack.mock.calls).toEqual([[trackId('audio-es')], [trackId('audio-commentary')]]);
+      });
+
+      it('ignores a rejection from the previous Player', async () => {
+        const { media, player } = setup();
+        const pending = player.pendNextAudioSwitch();
+
+        enableAudioTrack(media, 1);
+        await settle();
+
+        const next = load(media);
+
+        loadAudioTracks(media, next);
+        next.adoptAudio(AUDIO_TRACKS[0]!.id);
+        next.pendNextAudioSwitch();
+        enableAudioTrack(media, 1);
+        await settle();
+        pending.reject(cause);
+        await settle();
+
+        expect(enabledAudioTracks(media)).toEqual([trackId('audio-es')]);
+        expect(next.selectAudioTrack.mock.calls).toEqual([[trackId('audio-es')]]);
+      });
     });
   });
 });
