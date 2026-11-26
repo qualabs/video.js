@@ -18,6 +18,11 @@ export type OpenMoqSource = Pick<PlayerOptions, 'url' | 'namespace' | 'catalogTr
 
 type CatalogVideoTrack = Player['videoGroups'][number]['tracks'][number];
 
+interface LiveEdgeAnchor {
+  currentTime: number;
+  wallTime: number;
+}
+
 /** @internal */
 export interface OpenMoqAdapterProps {
   src: string;
@@ -43,6 +48,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #playerState: PlayerState | null = null;
   #error: MediaError | null = null;
   #catalogTrack: CatalogVideoTrack | undefined;
+  #liveEdgeAnchor: LiveEdgeAnchor | null = null;
   // Last `play()`/`pause()` call, so a `pause()` while `load()` is in flight wins over an earlier `play()`.
   #wantsPlay = false;
   // Guards async player creation across source changes and attach/detach cycles.
@@ -142,8 +148,15 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return this.streamType === MediaStreamTypes.LIVE ? 0 : Number.NaN;
   }
 
+  // Playa reports no edge. It starts at the newest group, then the edge runs on wall time from the first `playing`,
+  // so a paused or stalled playhead falls behind it.
   get liveEdgeStart(): number {
-    return this.streamType === MediaStreamTypes.LIVE && !this.ended ? this.currentTime : Number.NaN;
+    if (this.streamType !== MediaStreamTypes.LIVE || this.ended) return Number.NaN;
+
+    const anchor = this.#liveEdgeAnchor;
+    if (!anchor) return this.currentTime;
+
+    return anchor.currentTime + (performance.now() - anchor.wallTime) / 1000;
   }
 
   get error(): MediaError | null {
@@ -246,6 +259,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.#readyState = MediaReadyState.HAVE_NOTHING;
     this.#error = null;
     this.#catalogTrack = undefined;
+    this.#liveEdgeAnchor = null;
 
     if (player) this.#teardown = player.destroy().catch(noop);
 
@@ -316,7 +330,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #onPlay(): void {
     this.dispatchEvent(new Event('play'));
 
-    if (this.#readyState >= MediaReadyState.HAVE_FUTURE_DATA) this.dispatchEvent(new Event('playing'));
+    if (this.#readyState >= MediaReadyState.HAVE_FUTURE_DATA) this.#dispatchPlaying();
   }
 
   // Playa emits no `timeupdate` with `pause`, which a media element fires just before it.
@@ -336,7 +350,12 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
       this.dispatchEvent(new Event(type));
     }
 
-    if (!this.paused) this.dispatchEvent(new Event('playing'));
+    if (!this.paused) this.#dispatchPlaying();
+  }
+
+  #dispatchPlaying(): void {
+    this.#liveEdgeAnchor ??= { currentTime: this.currentTime, wallTime: performance.now() };
+    this.dispatchEvent(new Event('playing'));
   }
 }
 

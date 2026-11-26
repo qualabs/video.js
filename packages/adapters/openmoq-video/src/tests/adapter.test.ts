@@ -382,6 +382,45 @@ describe('OpenMoqAdapter', () => {
     });
   });
 
+  describe('liveEdgeStart', () => {
+    it('runs on wall time from the first playing, ahead of a stopped playhead', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+      const currentTime = vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+
+      vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+      await loadMetadata(media, emit);
+      emit('playing', {});
+      now.mockReturnValue(4_000);
+
+      expect(media.liveEdgeStart).toBe(15.5);
+
+      currentTime.mockReturnValue(13_000);
+      emit('play', {});
+
+      expect(media.liveEdgeStart).toBe(15.5);
+    });
+
+    it('follows the playback position again for a new source until it plays', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+
+      vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+      vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+      await loadMetadata(media, emit);
+      emit('playing', {});
+      now.mockReturnValue(4_000);
+      media.load();
+      await nextEvent(media, 'loadstart');
+      emit('statechange', { state: 'loading' });
+      emit('ready', { levels: [], audioTracks: [] });
+
+      expect(media.liveEdgeStart).toBe(12.5);
+    });
+  });
+
   describe('duration', () => {
     it('stays Infinity when playa reports a duration', async () => {
       const emit = stubPlaya();
