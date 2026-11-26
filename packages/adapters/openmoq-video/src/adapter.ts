@@ -9,7 +9,6 @@ import {
 } from '@videojs/media';
 import { MediaTracksMixin } from '@videojs/media/media-tracks';
 import { noop } from '@videojs/utils/function';
-import { isUndefined } from '@videojs/utils/predicate';
 
 import { OpenMoqMediaTracksMixin } from './media-tracks';
 
@@ -131,8 +130,18 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
     return false;
   }
 
+  // Live once metadata loads; qualabs/video.js#19 derives streamType/duration from catalog isLive (VOD).
   get streamType(): MediaStreamType {
     return this.#readyState >= MediaReadyState.HAVE_METADATA ? MediaStreamTypes.LIVE : MediaStreamTypes.UNKNOWN;
+  }
+
+  // Stub until qualabs/video.js#19: sliding window whose edge follows playback, so LIVE reads live while playing.
+  get targetLiveWindow(): number {
+    return this.streamType === MediaStreamTypes.LIVE ? 0 : Number.NaN;
+  }
+
+  get liveEdgeStart(): number {
+    return this.streamType === MediaStreamTypes.LIVE && !this.ended ? this.currentTime : Number.NaN;
   }
 
   get error(): MediaError | null {
@@ -157,6 +166,7 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
     if (this.#player?.state === 'playing') this.#player.pause();
   }
 
+  // CMAF: <video>.currentTime; LOC: elapsed playback time.
   get currentTime(): number {
     return (this.#player?.currentTime ?? 0) / 1000;
   }
@@ -167,11 +177,7 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
   }
 
   get duration(): number {
-    if (this.#readyState < MediaReadyState.HAVE_METADATA) return Number.NaN;
-
-    const duration = this.#player?.duration;
-
-    return isUndefined(duration) ? Number.POSITIVE_INFINITY : duration / 1000;
+    return this.streamType === MediaStreamTypes.LIVE ? Number.POSITIVE_INFINITY : Number.NaN;
   }
 
   #reload(): void {
@@ -210,10 +216,9 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
       player.on('ready', () => this.#onReady(player, video, canvas)),
       player.on('qualitychange', ({ level }) => sizeCanvas(canvas, level)),
       player.on('play', () => this.#onPlay()),
-      player.on('pause', () => this.dispatchEvent(new Event('pause'))),
+      player.on('pause', () => this.#onPause()),
       player.on('playing', () => this.#onPlaying()),
       player.on('timeupdate', () => this.dispatchEvent(new Event('timeupdate'))),
-      player.on('durationchange', () => this.dispatchEvent(new Event('durationchange'))),
       player.on('statechange', ({ state }) => this.#onStateChange(state)),
       player.on('ended', () => this.dispatchEvent(new Event('ended'))),
       player.on('error', ({ severity, code, message }) => this.#onError(severity, code, message)),
@@ -238,7 +243,10 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
 
     if (player) this.#teardown = player.destroy().catch(noop);
 
-    if (streamTypeKnown) this.dispatchEvent(new Event('streamtypechange'));
+    if (!streamTypeKnown) return;
+
+    this.dispatchEvent(new Event('streamtypechange'));
+    this.dispatchEvent(new Event('targetlivewindowchange'));
   }
 
   #fail(error: MediaError): void {
@@ -263,15 +271,20 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
     this.dispatchEvent(new Event('loadedmetadata'));
     this.dispatchEvent(new Event('durationchange'));
     this.dispatchEvent(new Event('streamtypechange'));
+    this.dispatchEvent(new Event('targetlivewindowchange'));
   }
 
-  // Playa reaches `ended` straight from `playing` without a `pause`, which a media element fires before `ended`.
+  // Playa reaches `ended` without the `timeupdate` and `pause` (when playing) a media element fires before `ended`.
   #onStateChange(state: PlayerState): void {
     const previous = this.#playerState;
 
     this.#playerState = state;
 
-    if (state === 'ended' && previous === 'playing') this.dispatchEvent(new Event('pause'));
+    if (state !== 'ended') return;
+
+    this.dispatchEvent(new Event('timeupdate'));
+
+    if (previous === 'playing') this.dispatchEvent(new Event('pause'));
   }
 
   // Only a fatal error stops playback; playa keeps going after a recoverable one.
@@ -288,6 +301,12 @@ class OpenMoqAdapterCore extends EventTarget implements Partial<Video> {
     this.dispatchEvent(new Event('play'));
 
     if (this.#readyState >= MediaReadyState.HAVE_FUTURE_DATA) this.dispatchEvent(new Event('playing'));
+  }
+
+  // Playa emits no `timeupdate` with `pause`, which a media element fires just before it.
+  #onPause(): void {
+    this.dispatchEvent(new Event('timeupdate'));
+    this.dispatchEvent(new Event('pause'));
   }
 
   // Playa reports its first rendered frame, which the MSE path presents before `play()`. Starting after it is announced

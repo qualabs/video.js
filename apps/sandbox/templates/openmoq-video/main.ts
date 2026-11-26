@@ -7,9 +7,9 @@
 //   v=<draft>         MOQT draft version. Defaults to 18, which node-relay needs.
 //   hash=<hex>        SHA-256 of a self-signed relay certificate, as printed by node-relay's `gen-cert`.
 import '@app/styles.css';
-import '@videojs/html/video/player';
-import '@videojs/html/video/skin';
-import '@videojs/html/video/skin.css';
+import '@videojs/html/live-video/player';
+import '@videojs/html/live-video/skin';
+import '@videojs/html/live-video/skin.css';
 import '@videojs/html/media/openmoq-video';
 import type { OpenMoqSource } from '@videojs/html/media/openmoq-video';
 
