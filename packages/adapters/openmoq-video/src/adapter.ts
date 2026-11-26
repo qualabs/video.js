@@ -49,6 +49,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #error: MediaError | null = null;
   #catalogTrack: CatalogVideoTrack | undefined;
   #liveEdgeAnchor: LiveEdgeAnchor | null = null;
+  #pausedProgressInterval: ReturnType<typeof setInterval> | null = null;
   // Last `play()`/`pause()` call, so a `pause()` while `load()` is in flight wins over an earlier `play()`.
   #wantsPlay = false;
   // Guards async player creation across source changes and attach/detach cycles.
@@ -260,6 +261,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.#error = null;
     this.#catalogTrack = undefined;
     this.#liveEdgeAnchor = null;
+    this.#stopPausedProgress();
 
     if (player) this.#teardown = player.destroy().catch(noop);
 
@@ -310,6 +312,8 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
     this.#playerState = state;
 
+    if (state !== 'paused') this.#stopPausedProgress();
+
     if (state !== 'ended') return;
 
     this.dispatchEvent(new Event('timeupdate'));
@@ -337,6 +341,21 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #onPause(): void {
     this.dispatchEvent(new Event('timeupdate'));
     this.dispatchEvent(new Event('pause'));
+
+    if (this.streamType === MediaStreamTypes.LIVE) this.#startPausedProgress();
+  }
+
+  // Video.js re-reads `liveEdgeStart` on `progress`, and nothing else fires while paused, so the edge would look frozen.
+  #startPausedProgress(): void {
+    this.#stopPausedProgress();
+    this.#pausedProgressInterval = setInterval(() => this.dispatchEvent(new Event('progress')), 1_000);
+  }
+
+  #stopPausedProgress(): void {
+    if (this.#pausedProgressInterval === null) return;
+
+    clearInterval(this.#pausedProgressInterval);
+    this.#pausedProgressInterval = null;
   }
 
   // Playa reports its first rendered frame, which the MSE path presents before `play()`. Starting after it is announced

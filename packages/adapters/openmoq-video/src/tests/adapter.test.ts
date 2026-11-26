@@ -22,7 +22,12 @@ const ON_DEMAND_TRACK: CatalogVideoTrack = {
 
 type CatalogVideoTrack = Player['videoGroups'][number]['tracks'][number];
 
+const adapters: OpenMoqAdapter[] = [];
+
 afterEach(() => {
+  for (const media of adapters.splice(0)) media.destroy();
+
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -32,6 +37,7 @@ function setup() {
   const video = document.createElement('video');
   const media = new OpenMoqAdapter();
 
+  adapters.push(media);
   container.append(video, document.createElement('canvas'));
   media.attach(video);
 
@@ -90,6 +96,19 @@ async function loadMetadata(media: OpenMoqAdapter, emit: ReturnType<typeof stubP
 
   emit('statechange', { state: 'loading' });
   emit('ready', { levels: [], audioTracks: [] });
+}
+
+/** Plays a loaded live stream from 12.5 s and pauses it, with playa's state order. */
+async function playThenPause(media: OpenMoqAdapter, emit: ReturnType<typeof stubPlaya>): Promise<void> {
+  const state = vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+
+  vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+  await loadMetadata(media, emit);
+  emit('statechange', { state: 'playing' });
+  emit('playing', {});
+  state.mockReturnValue('paused');
+  emit('statechange', { state: 'paused' });
+  emit('pause', {});
 }
 
 /** Without WebTransport in jsdom, a load fails, or is cut short by destroy, within a task. */
@@ -470,6 +489,69 @@ describe('OpenMoqAdapter', () => {
       emit('pause', {});
 
       expect(events).toEqual(['timeupdate', 'pause']);
+    });
+
+    it('fires progress every second on live, so the live edge is read again as it moves away', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+
+      const emit = stubPlaya();
+      const media = setup();
+      const edges: number[] = [];
+
+      await playThenPause(media, emit);
+      media.addEventListener('progress', () => edges.push(media.liveEdgeStart));
+      vi.advanceTimersByTime(6_000);
+
+      expect(edges).toEqual([13.5, 14.5, 15.5, 16.5, 17.5, 18.5]);
+    });
+
+    it.each(['playing', 'ended'] as const)('stops firing progress on %s', async (state) => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      const emit = stubPlaya();
+      const media = setup();
+
+      await playThenPause(media, emit);
+
+      const events = recordEvents(media, ['progress']);
+
+      vi.advanceTimersByTime(1_000);
+      emit('statechange', { state });
+      vi.advanceTimersByTime(3_000);
+
+      expect(events).toEqual(['progress']);
+    });
+
+    it('stops firing progress when the source is cleared', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      const emit = stubPlaya();
+      const media = setup();
+
+      await playThenPause(media, emit);
+
+      const events = recordEvents(media, ['progress']);
+
+      media.source = null;
+      vi.advanceTimersByTime(3_000);
+
+      expect(events).toEqual([]);
+    });
+
+    it('fires no progress on demand', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      stubCatalog([ON_DEMAND_TRACK]);
+
+      const emit = stubPlaya();
+      const media = setup();
+
+      await playThenPause(media, emit);
+
+      const events = recordEvents(media, ['progress']);
+
+      vi.advanceTimersByTime(3_000);
+
+      expect(events).toEqual([]);
     });
 
     it('leaves a Player that is still loading alone', async () => {
