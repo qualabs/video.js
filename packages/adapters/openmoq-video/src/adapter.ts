@@ -148,7 +148,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return this.streamType === MediaStreamTypes.LIVE ? 0 : Number.NaN;
   }
 
-  // Playa reports no edge. It starts at the newest group, then the edge runs on wall time from the first `playing`,
+  // Playa reports no edge. It starts at the newest group, then the edge runs on wall time from `playing`,
   // so a paused or stalled playhead falls behind it.
   get liveEdgeStart(): number {
     if (this.streamType !== MediaStreamTypes.LIVE || this.ended) return Number.NaN;
@@ -354,7 +354,11 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   }
 
   #dispatchPlaying(): void {
-    this.#liveEdgeAnchor ??= { currentTime: this.currentTime, wallTime: performance.now() };
+    // Playa resumes LOC at live, but its LOC playback time only counts time played, so the edge restarts from it.
+    if (!this.#liveEdgeAnchor || this.#player?.activeMediaType === 'canvas') {
+      this.#liveEdgeAnchor = { currentTime: this.currentTime, wallTime: performance.now() };
+    }
+
     this.dispatchEvent(new Event('playing'));
   }
 }

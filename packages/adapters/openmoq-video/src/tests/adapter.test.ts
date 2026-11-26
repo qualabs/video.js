@@ -383,12 +383,13 @@ describe('OpenMoqAdapter', () => {
   });
 
   describe('liveEdgeStart', () => {
-    it('runs on wall time from the first playing, ahead of a stopped playhead', async () => {
+    it('runs on wall time from the first playing on CMAF, ahead of a stopped playhead', async () => {
       const emit = stubPlaya();
       const media = setup();
       const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
       const currentTime = vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
 
+      vi.spyOn(Player.prototype, 'activeMediaType', 'get').mockReturnValue('video');
       vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
       await loadMetadata(media, emit);
       emit('playing', {});
@@ -400,6 +401,23 @@ describe('OpenMoqAdapter', () => {
       emit('play', {});
 
       expect(media.liveEdgeStart).toBe(15.5);
+    });
+
+    it('restarts from the playback position on every playing on LOC', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+
+      vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+      vi.spyOn(Player.prototype, 'activeMediaType', 'get').mockReturnValue('canvas');
+      vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+      await loadMetadata(media, emit);
+      emit('playing', {});
+      now.mockReturnValue(4_000);
+      emit('play', {});
+      now.mockReturnValue(5_000);
+
+      expect(media.liveEdgeStart).toBe(13.5);
     });
 
     it('follows the playback position again for a new source until it plays', async () => {
