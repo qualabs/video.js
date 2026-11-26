@@ -16,6 +16,8 @@ import { noop } from '@videojs/utils/function';
  */
 export type OpenMoqSource = Pick<PlayerOptions, 'url' | 'namespace' | 'catalogTrackName' | 'certHash' | 'draftVersion'>;
 
+type CatalogVideoTrack = Player['videoGroups'][number]['tracks'][number];
+
 /** @internal */
 export interface OpenMoqAdapterProps {
   src: string;
@@ -40,6 +42,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #readyState: MediaReadyStateValue = MediaReadyState.HAVE_NOTHING;
   #playerState: PlayerState | null = null;
   #error: MediaError | null = null;
+  #catalogTrack: CatalogVideoTrack | undefined;
   // Last `play()`/`pause()` call, so a `pause()` while `load()` is in flight wins over an earlier `play()`.
   #wantsPlay = false;
   // Guards async player creation across source changes and attach/detach cycles.
@@ -128,12 +131,13 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return false;
   }
 
-  // Live once metadata loads; qualabs/video.js#19 derives streamType/duration from catalog isLive (VOD).
   get streamType(): MediaStreamType {
-    return this.#readyState >= MediaReadyState.HAVE_METADATA ? MediaStreamTypes.LIVE : MediaStreamTypes.UNKNOWN;
+    if (this.#readyState < MediaReadyState.HAVE_METADATA) return MediaStreamTypes.UNKNOWN;
+
+    return this.#catalogTrack?.isLive === false ? MediaStreamTypes.ON_DEMAND : MediaStreamTypes.LIVE;
   }
 
-  // Stub until qualabs/video.js#19: sliding window whose edge follows playback, so LIVE reads live while playing.
+  // Playa cannot seek back yet, so live is a sliding window.
   get targetLiveWindow(): number {
     return this.streamType === MediaStreamTypes.LIVE ? 0 : Number.NaN;
   }
@@ -175,7 +179,9 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   }
 
   get duration(): number {
-    return this.streamType === MediaStreamTypes.LIVE ? Number.POSITIVE_INFINITY : Number.NaN;
+    if (this.streamType === MediaStreamTypes.LIVE) return Number.POSITIVE_INFINITY;
+
+    return (this.#catalogTrack?.trackDuration ?? Number.NaN) / 1000;
   }
 
   #reload(): void {
@@ -230,6 +236,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #release(): void {
     const player = this.#player;
     const streamTypeKnown = this.streamType !== MediaStreamTypes.UNKNOWN;
+    const targetLiveWindow = this.targetLiveWindow;
 
     for (const unsubscribe of this.#unsubscribes) unsubscribe();
 
@@ -238,12 +245,19 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.#playerState = null;
     this.#readyState = MediaReadyState.HAVE_NOTHING;
     this.#error = null;
+    this.#catalogTrack = undefined;
 
     if (player) this.#teardown = player.destroy().catch(noop);
 
     if (!streamTypeKnown) return;
 
     this.dispatchEvent(new Event('streamtypechange'));
+    this.#dispatchTargetLiveWindowChange(targetLiveWindow);
+  }
+
+  #dispatchTargetLiveWindowChange(previous: number): void {
+    if (Object.is(previous, this.targetLiveWindow)) return;
+
     this.dispatchEvent(new Event('targetlivewindowchange'));
   }
 
@@ -265,11 +279,15 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
     if (this.#readyState >= MediaReadyState.HAVE_METADATA) return;
 
+    const targetLiveWindow = this.targetLiveWindow;
+    const catalogTracks = player.videoGroups.flatMap((group) => group.tracks);
+
+    this.#catalogTrack = catalogTracks.find((track) => track.name === level?.trackName) ?? catalogTracks[0];
     this.#readyState = MediaReadyState.HAVE_METADATA;
     this.dispatchEvent(new Event('loadedmetadata'));
     this.dispatchEvent(new Event('durationchange'));
     this.dispatchEvent(new Event('streamtypechange'));
-    this.dispatchEvent(new Event('targetlivewindowchange'));
+    this.#dispatchTargetLiveWindowChange(targetLiveWindow);
   }
 
   // Playa reaches `ended` without the `timeupdate` and `pause` (when playing) a media element fires before `ended`.

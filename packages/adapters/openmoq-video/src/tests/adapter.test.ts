@@ -1,4 +1,4 @@
-import { Player, type PlayerEventMap } from '@openmoq/playa';
+import { type Level, Player, type PlayerEventMap } from '@openmoq/playa';
 import { MediaError } from '@videojs/media';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
@@ -13,6 +13,14 @@ const UNKNOWN_LIVE_VALUES = {
   liveEdgeStart: Number.NaN,
 };
 const LIVE_EVENTS = ['loadedmetadata', 'durationchange', 'streamtypechange', 'targetlivewindowchange', 'emptied'];
+const ON_DEMAND_TRACK: CatalogVideoTrack = {
+  name: 'video-720p',
+  packaging: 'cmaf',
+  isLive: false,
+  trackDuration: 30_000,
+};
+
+type CatalogVideoTrack = Player['videoGroups'][number]['tracks'][number];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -65,6 +73,14 @@ function stubPlaya() {
     // SAFETY: The handler stored for `event` was registered by `on(event)`, so it takes this event's payload.
     handlers.get(event)?.(data as never);
   };
+}
+
+function stubCatalog(tracks: CatalogVideoTrack[]): void {
+  vi.spyOn(Player.prototype, 'videoGroups', 'get').mockReturnValue([{ altGroup: 1, tracks }]);
+}
+
+function level(index: number, trackName: string): Level {
+  return { index, trackName, label: trackName, codec: 'avc1.640028', width: 1280, height: 720, bitrate: 1_000_000 };
 }
 
 /** Playa's order up to the catalog: `statechange` to `loading`, then `ready`. */
@@ -305,6 +321,63 @@ describe('OpenMoqAdapter', () => {
       media.detach();
 
       expect(events).toEqual(['streamtypechange', 'targetlivewindowchange']);
+      expect(liveValues(media)).toEqual(UNKNOWN_LIVE_VALUES);
+    });
+  });
+
+  describe('streamType', () => {
+    it('is on-demand for an on-demand catalog track, with its duration and no live window', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      stubCatalog([ON_DEMAND_TRACK]);
+      await loadMetadata(media, emit);
+
+      expect(events).toEqual(['loadedmetadata', 'durationchange', 'streamtypechange']);
+      expect(liveValues(media)).toEqual({
+        streamType: 'on-demand',
+        duration: 30,
+        targetLiveWindow: Number.NaN,
+        liveEdgeStart: Number.NaN,
+      });
+    });
+
+    it('has no duration for an on-demand track without one', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      stubCatalog([{ name: 'video-720p', packaging: 'cmaf', isLive: false }]);
+      await loadMetadata(media, emit);
+
+      expect(media.streamType).toBe('on-demand');
+      expect(media.duration).toBeNaN();
+    });
+
+    it('follows the catalog track of the current level', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      stubCatalog([{ name: 'video-1080p', packaging: 'cmaf', isLive: true }, ON_DEMAND_TRACK]);
+      vi.spyOn(Player.prototype, 'levels', 'get').mockReturnValue([level(0, 'video-1080p'), level(1, 'video-720p')]);
+      vi.spyOn(Player.prototype, 'currentLevel', 'get').mockReturnValue(1);
+      await loadMetadata(media, emit);
+
+      expect(media.streamType).toBe('on-demand');
+    });
+
+    it('resets from on-demand without a live window change when the source is cleared', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      stubCatalog([ON_DEMAND_TRACK]);
+      await loadMetadata(media, emit);
+
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      media.source = null;
+
+      expect(events).toEqual(['streamtypechange', 'emptied']);
       expect(liveValues(media)).toEqual(UNKNOWN_LIVE_VALUES);
     });
   });
