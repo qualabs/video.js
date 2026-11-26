@@ -150,7 +150,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   }
 
   // Playa reports no edge. It starts at the newest group, then the edge runs on wall time from `playing`,
-  // so a paused or stalled playhead falls behind it.
+  // so a pause leaves the playhead behind it, and so does a CMAF stall (LOC play time runs through stalls).
   get liveEdgeStart(): number {
     if (this.streamType !== MediaStreamTypes.LIVE || this.ended) return Number.NaN;
 
