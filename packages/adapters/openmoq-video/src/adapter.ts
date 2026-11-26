@@ -5,8 +5,10 @@ import {
   type MediaReadyStateValue,
   type MediaStreamType,
   MediaStreamTypes,
+  NO_TIME_RANGES_YET,
   type Video,
 } from '@videojs/media';
+import { createTimeRange } from '@videojs/media/dom';
 import { noop } from '@videojs/utils/function';
 
 /**
@@ -15,6 +17,15 @@ import { noop } from '@videojs/utils/function';
  * @internal
  */
 export type OpenMoqSource = Pick<PlayerOptions, 'url' | 'namespace' | 'catalogTrackName' | 'certHash' | 'draftVersion'>;
+
+// A forward target this close to the playhead is the same position, not a request to move.
+const SEEK_EPSILON = 0.1;
+// The store's live edge is refreshed by the 1 s `progress`, so a target this close to the edge still means "go live".
+const LIVE_EDGE_TOLERANCE = 1;
+// Playa's own `targetAheadSec`: how far behind the end of the buffer it keeps the playhead when it chases live.
+const LIVE_JUMP_BEHIND_BUFFER_END = 2;
+// Playa fails a playhead stuck at a buffer hole after 10 s, so a jump still waiting by then will not happen.
+const PENDING_LIVE_JUMP_TIMEOUT = 10_000;
 
 type CatalogVideoTrack = Player['videoGroups'][number]['tracks'][number];
 
@@ -49,7 +60,8 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #error: MediaError | null = null;
   #catalogTrack: CatalogVideoTrack | undefined;
   #liveEdgeAnchor: LiveEdgeAnchor | null = null;
-  #pausedProgressInterval: ReturnType<typeof setInterval> | null = null;
+  #liveTickInterval: ReturnType<typeof setInterval> | null = null;
+  #pendingLiveJumpDeadline: number | null = null;
   // Last `play()`/`pause()` call, so a `pause()` while `load()` is in flight wins over an earlier `play()`.
   #wantsPlay = false;
   // Guards async player creation across source changes and attach/detach cycles.
@@ -160,6 +172,22 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     return anchor.currentTime + (performance.now() - anchor.wallTime) / 1000;
   }
 
+  // The current position up to the live edge, the only place ahead Playa can go.
+  get seekable() {
+    const liveEdgeStart = this.liveEdgeStart;
+
+    return Number.isFinite(liveEdgeStart)
+      ? createTimeRange(Math.min(this.currentTime, liveEdgeStart), liveEdgeStart)
+      : NO_TIME_RANGES_YET;
+  }
+
+  // LOC frames go to the canvas, which has no buffer to report.
+  get buffered() {
+    const video = this.#video;
+
+    return video && this.#player?.activeMediaType === 'video' ? video.buffered : NO_TIME_RANGES_YET;
+  }
+
   get error(): MediaError | null {
     return this.#error;
   }
@@ -186,9 +214,14 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   get currentTime(): number {
     return (this.#player?.currentTime ?? 0) / 1000;
   }
-  // Seeking is not supported yet. A settled seek is still announced, so callers awaiting `seeked` resume.
-  set currentTime(_value: number) {
+  // Playa can only go to live, so a target ahead of the playhead or at the edge goes there and any other is ignored.
+  // Every seek settles at once, so callers awaiting `seeked` resume even when the jump waits for data.
+  set currentTime(value: number) {
     this.dispatchEvent(new Event('seeking'));
+
+    if (this.#isLiveEdgeTarget(value)) this.#seekToLive();
+    else this.#pendingLiveJumpDeadline = null;
+
     queueMicrotask(() => this.dispatchEvent(new Event('seeked')));
   }
 
@@ -261,7 +294,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.#error = null;
     this.#catalogTrack = undefined;
     this.#liveEdgeAnchor = null;
-    this.#stopPausedProgress();
+    this.#stopLiveTick();
 
     if (player) this.#teardown = player.destroy().catch(noop);
 
@@ -312,7 +345,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
     this.#playerState = state;
 
-    if (state !== 'paused') this.#stopPausedProgress();
+    if (state !== 'playing' && state !== 'paused') this.#stopLiveTick();
 
     if (state !== 'ended') return;
 
@@ -342,20 +375,78 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     this.dispatchEvent(new Event('timeupdate'));
     this.dispatchEvent(new Event('pause'));
 
-    if (this.streamType === MediaStreamTypes.LIVE) this.#startPausedProgress();
+    this.#pendingLiveJumpDeadline = null;
   }
 
-  // Video.js re-reads `liveEdgeStart` on `progress`, and nothing else fires while paused, so the edge would look frozen.
-  #startPausedProgress(): void {
-    this.#stopPausedProgress();
-    this.#pausedProgressInterval = setInterval(() => this.dispatchEvent(new Event('progress')), 1_000);
+  // Video.js re-reads `liveEdgeStart` and `seekable` only on events such as `progress`, so the edge would look frozen.
+  #startLiveTick(): void {
+    if (this.streamType !== MediaStreamTypes.LIVE || this.#liveTickInterval !== null) return;
+
+    this.#liveTickInterval = setInterval(() => this.#onLiveTick(), 1_000);
   }
 
-  #stopPausedProgress(): void {
-    if (this.#pausedProgressInterval === null) return;
+  // A waiting jump runs on the tick, so it ends with it.
+  #stopLiveTick(): void {
+    this.#pendingLiveJumpDeadline = null;
 
-    clearInterval(this.#pausedProgressInterval);
-    this.#pausedProgressInterval = null;
+    if (this.#liveTickInterval === null) return;
+
+    clearInterval(this.#liveTickInterval);
+    this.#liveTickInterval = null;
+  }
+
+  #onLiveTick(): void {
+    const deadline = this.#pendingLiveJumpDeadline;
+
+    if (deadline !== null && performance.now() < deadline) this.#jumpToNewestBuffer();
+    else this.#pendingLiveJumpDeadline = null;
+
+    this.dispatchEvent(new Event('progress'));
+  }
+
+  #isLiveEdgeTarget(value: number): boolean {
+    const liveEdgeStart = this.liveEdgeStart;
+    if (!this.#liveEdgeAnchor || !Number.isFinite(liveEdgeStart)) return false;
+
+    return value >= this.currentTime + SEEK_EPSILON || Math.abs(value - liveEdgeStart) <= LIVE_EDGE_TOLERANCE;
+  }
+
+  // A paused stream resumes. LOC resumes at live and re-anchors on `playing`. CMAF jumps once newer data is buffered,
+  // and never while paused: Playa keeps reporting the paused position until it plays again.
+  #seekToLive(): void {
+    const paused = this.paused;
+
+    if (paused) void this.play();
+
+    if (this.#player?.activeMediaType === 'canvas') {
+      if (!paused) this.#anchorLiveEdge();
+
+      return;
+    }
+
+    if (paused || !this.#jumpToNewestBuffer()) {
+      this.#pendingLiveJumpDeadline = performance.now() + PENDING_LIVE_JUMP_TIMEOUT;
+    }
+  }
+
+  // Playa's own chase never leaves the buffered range the playhead is in, so it cannot cross to newer data on its own.
+  #jumpToNewestBuffer(): boolean {
+    const video = this.#video;
+    if (!video) return false;
+
+    const { buffered } = video;
+    const newest = buffered.length - 1;
+    if (newest < 0 || buffered.start(newest) <= video.currentTime) return false;
+
+    video.currentTime = Math.max(buffered.start(newest), buffered.end(newest) - LIVE_JUMP_BEHIND_BUFFER_END);
+    this.#pendingLiveJumpDeadline = null;
+    this.#anchorLiveEdge();
+
+    return true;
+  }
+
+  #anchorLiveEdge(): void {
+    this.#liveEdgeAnchor = { currentTime: this.currentTime, wallTime: performance.now() };
   }
 
   // Playa reports its first rendered frame, which the MSE path presents before `play()`. Starting after it is announced
@@ -374,10 +465,9 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
   #dispatchPlaying(): void {
     // Playa resumes LOC at live, but its LOC playback time only counts time played, so the edge restarts from it.
-    if (!this.#liveEdgeAnchor || this.#player?.activeMediaType === 'canvas') {
-      this.#liveEdgeAnchor = { currentTime: this.currentTime, wallTime: performance.now() };
-    }
+    if (!this.#liveEdgeAnchor || this.#player?.activeMediaType === 'canvas') this.#anchorLiveEdge();
 
+    this.#startLiveTick();
     this.dispatchEvent(new Event('playing'));
   }
 }
