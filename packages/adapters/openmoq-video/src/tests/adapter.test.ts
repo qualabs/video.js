@@ -1,4 +1,4 @@
-import { Player, type PlayerEventMap } from '@openmoq/playa';
+import { type Level, Player, type PlayerEventMap } from '@openmoq/playa';
 import { MediaError } from '@videojs/media';
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 
@@ -13,8 +13,21 @@ const UNKNOWN_LIVE_VALUES = {
   liveEdgeStart: Number.NaN,
 };
 const LIVE_EVENTS = ['loadedmetadata', 'durationchange', 'streamtypechange', 'targetlivewindowchange', 'emptied'];
+const ON_DEMAND_TRACK: CatalogVideoTrack = {
+  name: 'video-720p',
+  packaging: 'cmaf',
+  isLive: false,
+  trackDuration: 30_000,
+};
+
+type CatalogVideoTrack = Player['videoGroups'][number]['tracks'][number];
+
+const adapters: OpenMoqAdapter[] = [];
 
 afterEach(() => {
+  for (const media of adapters.splice(0)) media.destroy();
+
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -24,6 +37,7 @@ function setup() {
   const video = document.createElement('video');
   const media = new OpenMoqAdapter();
 
+  adapters.push(media);
   container.append(video, document.createElement('canvas'));
   media.attach(video);
 
@@ -67,6 +81,14 @@ function stubPlaya() {
   };
 }
 
+function stubCatalog(tracks: CatalogVideoTrack[]): void {
+  vi.spyOn(Player.prototype, 'videoGroups', 'get').mockReturnValue([{ altGroup: 1, tracks }]);
+}
+
+function level(index: number, trackName: string): Level {
+  return { index, trackName, label: trackName, codec: 'avc1.640028', width: 1280, height: 720, bitrate: 1_000_000 };
+}
+
 /** Playa's order up to the catalog: `statechange` to `loading`, then `ready`. */
 async function loadMetadata(media: OpenMoqAdapter, emit: ReturnType<typeof stubPlaya>): Promise<void> {
   media.source = SOURCE;
@@ -74,6 +96,19 @@ async function loadMetadata(media: OpenMoqAdapter, emit: ReturnType<typeof stubP
 
   emit('statechange', { state: 'loading' });
   emit('ready', { levels: [], audioTracks: [] });
+}
+
+/** Plays a loaded live stream from 12.5 s and pauses it, with playa's state order. */
+async function playThenPause(media: OpenMoqAdapter, emit: ReturnType<typeof stubPlaya>): Promise<void> {
+  const state = vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+
+  vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+  await loadMetadata(media, emit);
+  emit('statechange', { state: 'playing' });
+  emit('playing', {});
+  state.mockReturnValue('paused');
+  emit('statechange', { state: 'paused' });
+  emit('pause', {});
 }
 
 /** Without WebTransport in jsdom, a load fails, or is cut short by destroy, within a task. */
@@ -309,6 +344,120 @@ describe('OpenMoqAdapter', () => {
     });
   });
 
+  describe('streamType', () => {
+    it('is on-demand for an on-demand catalog track, with its duration and no live window', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      stubCatalog([ON_DEMAND_TRACK]);
+      await loadMetadata(media, emit);
+
+      expect(events).toEqual(['loadedmetadata', 'durationchange', 'streamtypechange']);
+      expect(liveValues(media)).toEqual({
+        streamType: 'on-demand',
+        duration: 30,
+        targetLiveWindow: Number.NaN,
+        liveEdgeStart: Number.NaN,
+      });
+    });
+
+    it('has no duration for an on-demand track without one', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      stubCatalog([{ name: 'video-720p', packaging: 'cmaf', isLive: false }]);
+      await loadMetadata(media, emit);
+
+      expect(media.streamType).toBe('on-demand');
+      expect(media.duration).toBeNaN();
+    });
+
+    it('follows the catalog track of the current level', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      stubCatalog([{ name: 'video-1080p', packaging: 'cmaf', isLive: true }, ON_DEMAND_TRACK]);
+      vi.spyOn(Player.prototype, 'levels', 'get').mockReturnValue([level(0, 'video-1080p'), level(1, 'video-720p')]);
+      vi.spyOn(Player.prototype, 'currentLevel', 'get').mockReturnValue(1);
+      await loadMetadata(media, emit);
+
+      expect(media.streamType).toBe('on-demand');
+    });
+
+    it('resets from on-demand without a live window change when the source is cleared', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      stubCatalog([ON_DEMAND_TRACK]);
+      await loadMetadata(media, emit);
+
+      const events = recordEvents(media, LIVE_EVENTS);
+
+      media.source = null;
+
+      expect(events).toEqual(['streamtypechange', 'emptied']);
+      expect(liveValues(media)).toEqual(UNKNOWN_LIVE_VALUES);
+    });
+  });
+
+  describe('liveEdgeStart', () => {
+    it('runs on wall time from the first playing on CMAF, ahead of a stopped playhead', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+      const currentTime = vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+
+      vi.spyOn(Player.prototype, 'activeMediaType', 'get').mockReturnValue('video');
+      vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+      await loadMetadata(media, emit);
+      emit('playing', {});
+      now.mockReturnValue(4_000);
+
+      expect(media.liveEdgeStart).toBe(15.5);
+
+      currentTime.mockReturnValue(13_000);
+      emit('play', {});
+
+      expect(media.liveEdgeStart).toBe(15.5);
+    });
+
+    it('restarts from the playback position on every playing on LOC', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+
+      vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+      vi.spyOn(Player.prototype, 'activeMediaType', 'get').mockReturnValue('canvas');
+      vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+      await loadMetadata(media, emit);
+      emit('playing', {});
+      now.mockReturnValue(4_000);
+      emit('play', {});
+      now.mockReturnValue(5_000);
+
+      expect(media.liveEdgeStart).toBe(13.5);
+    });
+
+    it('follows the playback position again for a new source until it plays', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+
+      vi.spyOn(Player.prototype, 'currentTime', 'get').mockReturnValue(12_500);
+      vi.spyOn(Player.prototype, 'state', 'get').mockReturnValue('playing');
+      await loadMetadata(media, emit);
+      emit('playing', {});
+      now.mockReturnValue(4_000);
+      media.load();
+      await nextEvent(media, 'loadstart');
+      emit('statechange', { state: 'loading' });
+      emit('ready', { levels: [], audioTracks: [] });
+
+      expect(media.liveEdgeStart).toBe(12.5);
+    });
+  });
+
   describe('duration', () => {
     it('stays Infinity when playa reports a duration', async () => {
       const emit = stubPlaya();
@@ -340,6 +489,69 @@ describe('OpenMoqAdapter', () => {
       emit('pause', {});
 
       expect(events).toEqual(['timeupdate', 'pause']);
+    });
+
+    it('fires progress every second on live, so the live edge is read again as it moves away', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+
+      const emit = stubPlaya();
+      const media = setup();
+      const edges: number[] = [];
+
+      await playThenPause(media, emit);
+      media.addEventListener('progress', () => edges.push(media.liveEdgeStart));
+      vi.advanceTimersByTime(6_000);
+
+      expect(edges).toEqual([13.5, 14.5, 15.5, 16.5, 17.5, 18.5]);
+    });
+
+    it.each(['playing', 'ended'] as const)('stops firing progress on %s', async (state) => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      const emit = stubPlaya();
+      const media = setup();
+
+      await playThenPause(media, emit);
+
+      const events = recordEvents(media, ['progress']);
+
+      vi.advanceTimersByTime(1_000);
+      emit('statechange', { state });
+      vi.advanceTimersByTime(3_000);
+
+      expect(events).toEqual(['progress']);
+    });
+
+    it('stops firing progress when the source is cleared', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      const emit = stubPlaya();
+      const media = setup();
+
+      await playThenPause(media, emit);
+
+      const events = recordEvents(media, ['progress']);
+
+      media.source = null;
+      vi.advanceTimersByTime(3_000);
+
+      expect(events).toEqual([]);
+    });
+
+    it('fires no progress on demand', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      stubCatalog([ON_DEMAND_TRACK]);
+
+      const emit = stubPlaya();
+      const media = setup();
+
+      await playThenPause(media, emit);
+
+      const events = recordEvents(media, ['progress']);
+
+      vi.advanceTimersByTime(3_000);
+
+      expect(events).toEqual([]);
     });
 
     it('leaves a Player that is still loading alone', async () => {
