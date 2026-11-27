@@ -45,7 +45,7 @@ const PLAYA_ERRORS = Object.entries(PlayerErrorCode).map(([name, playaErrorCode]
 
 // jsdom has neither `VideoDecoder` nor `MediaSource`, so playa reports itself unsupported.
 beforeEach(() => {
-  vi.spyOn(Player, 'isSupported').mockReturnValue(true);
+  vi.spyOn(Player, 'checkSupport').mockReturnValue({ ...Player.checkSupport(), supported: true });
 });
 
 afterEach(() => {
@@ -355,7 +355,9 @@ describe('OpenMoqAdapter', () => {
       const loadstart = vi.fn();
       const onError = vi.fn();
 
-      vi.spyOn(Player, 'isSupported').mockReturnValue(false);
+      const support = { ...Player.checkSupport(), supported: false, reason: 'No decoder available' };
+
+      vi.spyOn(Player, 'checkSupport').mockReturnValue(support);
       media.addEventListener('loadstart', loadstart);
       media.addEventListener('error', onError);
       media.source = SOURCE;
@@ -366,6 +368,7 @@ describe('OpenMoqAdapter', () => {
         code: MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
         fatal: true,
         message: MediaError.defaultMessages[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+        data: support,
       });
       expect(loadstart).not.toHaveBeenCalled();
       expect(media.engine).toBeNull();
