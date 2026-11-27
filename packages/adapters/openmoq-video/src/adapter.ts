@@ -325,6 +325,8 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #onError(severity: 'fatal' | 'recoverable', code: number, message: string): void {
     if (severity !== 'fatal') return;
 
+    if (__DEV__) console.warn(`[openmoq-video] Playa failed with error 0x${code.toString(16)}: ${message}`);
+
     const mediaErrorCode = playaErrorCodeToMediaErrorCode.get(code) ?? MediaError.MEDIA_ERR_CUSTOM;
     const useCanonicalMessage = mediaErrorCode !== MediaError.MEDIA_ERR_CUSTOM;
     const error = new MediaError(useCanonicalMessage ? undefined : message, mediaErrorCode, true);

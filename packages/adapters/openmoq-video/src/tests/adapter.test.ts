@@ -276,6 +276,17 @@ describe('OpenMoqAdapter', () => {
       expect(media.error?.message).toBe(MediaError.defaultMessages[MediaError.MEDIA_ERR_NETWORK]);
     });
 
+    it("warns with playa's code and message", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'fatal', code: PlayerErrorCode.SUBSCRIPTION_REFUSED, message: 'catalog refused' });
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('0x1302: catalog refused'));
+    });
+
     it("reports an unknown fatal code as a custom error with playa's message", async () => {
       const emit = stubPlaya();
       const media = setup();
