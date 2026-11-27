@@ -329,36 +329,38 @@ describe('OpenMoqAdapter', () => {
       expect(media.error?.code).toBe(MediaError.MEDIA_ERR_NETWORK);
     });
 
-    it('keeps a refused catalog reported before playa rejects the load', async () => {
+    it('reports a refused catalog, which playa announces after load resolves, as source not supported', async () => {
       const emit = stubPlaya();
       const media = setup();
       const onError = vi.fn();
 
-      vi.spyOn(Player.prototype, 'load').mockImplementation(async () => {
-        emit('error', { severity: 'fatal', code: PlayerErrorCode.SUBSCRIPTION_REFUSED, message: 'catalog refused' });
-        throw new Error('catalog refused');
-      });
-      media.addEventListener('error', onError);
-      media.source = SOURCE;
-      await flush();
-
-      expect(onError).toHaveBeenCalledOnce();
-      expect(media.error?.code).toBe(MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED);
-    });
-
-    it('keeps a rejected load reported before playa reports a refused catalog', async () => {
-      const emit = stubPlaya();
-      const media = setup();
-      const onError = vi.fn();
-
-      vi.spyOn(Player.prototype, 'load').mockRejectedValue(new Error('catalog refused'));
       media.addEventListener('error', onError);
       media.source = SOURCE;
       await flush();
       emit('error', { severity: 'fatal', code: PlayerErrorCode.SUBSCRIPTION_REFUSED, message: 'catalog refused' });
 
       expect(onError).toHaveBeenCalledOnce();
-      expect(media.error?.code).toBe(MediaError.MEDIA_ERR_NETWORK);
+      expect(media.error?.code).toBe(MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED);
+    });
+
+    it('keeps a catalog subscription that failed to send, which playa announces before it rejects the load', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const onError = vi.fn();
+
+      vi.spyOn(Player.prototype, 'load').mockImplementation(async () => {
+        emit('error', { severity: 'fatal', code: PlayerErrorCode.LOAD_FAILED, message: 'catalog not sent' });
+        throw new Error('catalog not sent');
+      });
+      media.addEventListener('error', onError);
+      media.source = SOURCE;
+      await flush();
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
+        data: { playaErrorCode: PlayerErrorCode.LOAD_FAILED },
+      });
     });
 
     it('fails an unsupported browser before building a Player', async () => {
