@@ -1,4 +1,5 @@
 import { type Level, Player, type PlayerOptions, type PlayerState } from '@openmoq/playa';
+import { PlayerErrorCode } from '@openmoq/player';
 import {
   MediaError,
   MediaReadyState,
@@ -8,6 +9,30 @@ import {
   type Video,
 } from '@videojs/media';
 import { noop } from '@videojs/utils/function';
+
+const playaErrorCodeToMediaErrorCode = new Map<number, number>([
+  [PlayerErrorCode.CONTROL_STREAM_LOST, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.DATA_STREAM_RESET, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.DATAGRAM_DECODE_ERROR, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.CONNECTION_LOST, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.REQUEST_UPDATE_FAILED, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.MEDIA_STARVED, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.VIDEO_DECODE_ERROR, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.AUDIO_DECODE_ERROR, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.MEDIA_ELEMENT_WEDGED, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.MEDIA_GAP_UNRECOVERABLE, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.CODEC_UNSUPPORTED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CATALOG_PARSE_ERROR, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CATALOG_DELTA_ERROR, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CMAF_INIT_INVALID, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CMAF_INIT_TIMEOUT, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.CATALOG_WAIT_TIMEOUT, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.SEEK_FAILED, MediaError.MEDIA_ERR_CUSTOM],
+  [PlayerErrorCode.LOAD_FAILED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.SUBSCRIPTION_REFUSED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.ALL_TRACKS_REFUSED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.SELECTION_FAILED, MediaError.MEDIA_ERR_CUSTOM],
+]);
 
 /**
  * Connection fields for one broadcast, passed to the playa `Player` as-is.
@@ -186,9 +211,10 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
       if (__DEV__) console.warn('[openmoq-video] Failed to load the source.', cause);
 
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const error = new MediaError(undefined, MediaError.MEDIA_ERR_NETWORK, true);
 
-      this.#fail(new MediaError(message, MediaError.MEDIA_ERR_NETWORK, true));
+      error.data = { cause };
+      this.#fail(error);
     });
   }
 
@@ -206,6 +232,16 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     const video = this.#video;
     const canvas = this.#canvas;
     if (generation !== this.#generation || !source?.url || !source.namespace || !video || !canvas) return;
+
+    const support = Player.checkSupport();
+
+    if (!support.supported) {
+      const error = new MediaError(undefined, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED, true);
+
+      error.data = { support };
+      this.#fail(error);
+      return;
+    }
 
     const player = new Player(null, { ...source, video, canvas });
 
@@ -251,7 +287,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     if (this.#error) return;
 
     this.#error = error;
-    this.dispatchEvent(new Event('error'));
+    this.dispatchEvent(new ErrorEvent('error', { error, message: error.message }));
   }
 
   #onReady(player: Player, video: HTMLVideoElement, canvas: HTMLCanvasElement): void {
@@ -289,9 +325,13 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #onError(severity: 'fatal' | 'recoverable', code: number, message: string): void {
     if (severity !== 'fatal') return;
 
-    const error = new MediaError(message, MediaError.MEDIA_ERR_CUSTOM, true);
+    if (__DEV__) console.warn(`[openmoq-video] Playa failed with error 0x${code.toString(16)}: ${message}`);
 
-    error.data = { playaErrorCode: code };
+    const mediaErrorCode = playaErrorCodeToMediaErrorCode.get(code) ?? MediaError.MEDIA_ERR_CUSTOM;
+    const useCanonicalMessage = mediaErrorCode !== MediaError.MEDIA_ERR_CUSTOM;
+    const error = new MediaError(useCanonicalMessage ? undefined : message, mediaErrorCode, true);
+
+    error.data = { playaErrorCode: code, message };
     this.#fail(error);
   }
 

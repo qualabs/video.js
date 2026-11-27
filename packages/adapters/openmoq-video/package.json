@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "@openmoq/playa": "0.7.0",
+    "@openmoq/player": "0.7.0",
     "@videojs/media": "workspace:*",
     "@videojs/utils": "workspace:*"
   },

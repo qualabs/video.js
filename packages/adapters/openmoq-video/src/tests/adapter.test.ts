@@ -1,7 +1,9 @@
 import { Player, type PlayerEventMap } from '@openmoq/playa';
+import { PlayerErrorCode } from '@openmoq/player';
 import { MediaError } from '@videojs/media';
-import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
+import enginePackageJson from '../../node_modules/@openmoq/player/package.json' with { type: 'json' };
 import { OpenMoqAdapter, type OpenMoqSource } from '../index';
 
 const SOURCE: OpenMoqSource = { url: 'https://relay.example.com/moq', namespace: 'live' };
@@ -13,6 +15,39 @@ const UNKNOWN_LIVE_VALUES = {
   liveEdgeStart: Number.NaN,
 };
 const LIVE_EVENTS = ['loadedmetadata', 'durationchange', 'streamtypechange', 'targetlivewindowchange', 'emptied'];
+const MEDIA_ERROR_CODE_BY_PLAYA_ERROR_CODE = new Map<number, number>([
+  [PlayerErrorCode.CONTROL_STREAM_LOST, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.DATA_STREAM_RESET, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.DATAGRAM_DECODE_ERROR, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.CONNECTION_LOST, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.REQUEST_UPDATE_FAILED, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.MEDIA_STARVED, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.VIDEO_DECODE_ERROR, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.AUDIO_DECODE_ERROR, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.MEDIA_ELEMENT_WEDGED, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.MEDIA_GAP_UNRECOVERABLE, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.CODEC_UNSUPPORTED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CATALOG_PARSE_ERROR, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CATALOG_DELTA_ERROR, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CMAF_INIT_INVALID, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CMAF_INIT_TIMEOUT, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.CATALOG_WAIT_TIMEOUT, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.SEEK_FAILED, MediaError.MEDIA_ERR_CUSTOM],
+  [PlayerErrorCode.LOAD_FAILED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.SUBSCRIPTION_REFUSED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.ALL_TRACKS_REFUSED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.SELECTION_FAILED, MediaError.MEDIA_ERR_CUSTOM],
+]);
+const PLAYA_ERRORS = Object.entries(PlayerErrorCode).map(([name, playaErrorCode]) => ({
+  name,
+  playaErrorCode,
+  code: MEDIA_ERROR_CODE_BY_PLAYA_ERROR_CODE.get(playaErrorCode),
+}));
+
+// jsdom has neither `VideoDecoder` nor `MediaSource`, so playa reports itself unsupported.
+beforeEach(() => {
+  vi.spyOn(Player, 'checkSupport').mockReturnValue({ ...Player.checkSupport(), supported: true });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -84,6 +119,12 @@ function flush(): Promise<void> {
 }
 
 describe('OpenMoqAdapter', () => {
+  describe('engine', () => {
+    it('is a playa built on the installed @openmoq/player, whose error codes the adapter maps', () => {
+      expect(Player.version).toBe(enginePackageJson.version);
+    });
+  });
+
   describe('attach', () => {
     it('builds no Player for a video without a sibling canvas', async () => {
       const container = document.createElement('div');
@@ -184,7 +225,7 @@ describe('OpenMoqAdapter', () => {
   });
 
   describe('error', () => {
-    it('reports a failed load as a fatal network error', async () => {
+    it('reports a failed load as a fatal network error with its default message', async () => {
       const media = setup();
       const onError = vi.fn();
 
@@ -193,7 +234,12 @@ describe('OpenMoqAdapter', () => {
       await flush();
 
       expect(onError).toHaveBeenCalledOnce();
-      expect(media.error).toMatchObject({ code: MediaError.MEDIA_ERR_NETWORK, fatal: true });
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_NETWORK,
+        fatal: true,
+        message: MediaError.defaultMessages[MediaError.MEDIA_ERR_NETWORK],
+      });
+      expect(media.error?.data).toEqual({ cause: expect.any(Error) });
     });
 
     it('clears for a new source and reports its failure again', async () => {
@@ -211,6 +257,141 @@ describe('OpenMoqAdapter', () => {
       await flush();
 
       expect(onError).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(PLAYA_ERRORS)('reports a fatal $name as MediaError code $code', async ({ playaErrorCode, code }) => {
+      const emit = stubPlaya();
+      const media = setup();
+      const onError = vi.fn();
+
+      media.addEventListener('error', onError);
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'fatal', code: playaErrorCode, message: 'playa failure' });
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError.mock.calls[0]?.[0]).toMatchObject({ error: media.error, message: media.error?.message });
+      expect(media.error).toMatchObject({ code, fatal: true, data: { playaErrorCode, message: 'playa failure' } });
+    });
+
+    it("shows the default message of the mapped code instead of playa's", async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'fatal', code: PlayerErrorCode.CONNECTION_LOST, message: 'playa failure' });
+
+      expect(media.error?.message).toBe(MediaError.defaultMessages[MediaError.MEDIA_ERR_NETWORK]);
+    });
+
+    it("warns with playa's code and message", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'fatal', code: PlayerErrorCode.SUBSCRIPTION_REFUSED, message: 'catalog refused' });
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('0x1302: catalog refused'));
+    });
+
+    it("reports an unknown fatal code as a custom error with playa's message", async () => {
+      const emit = stubPlaya();
+      const media = setup();
+
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'fatal', code: 0x1fff, message: 'playa failure' });
+
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_CUSTOM,
+        fatal: true,
+        message: 'playa failure',
+        data: { playaErrorCode: 0x1fff, message: 'playa failure' },
+      });
+    });
+
+    it('ignores a recoverable error', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const onError = vi.fn();
+
+      media.addEventListener('error', onError);
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'recoverable', code: PlayerErrorCode.SUBSCRIPTION_REFUSED, message: 'track refused' });
+
+      expect(media.error).toBeNull();
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('keeps the first fatal error', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const onError = vi.fn();
+
+      media.addEventListener('error', onError);
+      await loadMetadata(media, emit);
+      emit('error', { severity: 'fatal', code: PlayerErrorCode.CONNECTION_LOST, message: 'connection lost' });
+      emit('error', { severity: 'fatal', code: PlayerErrorCode.VIDEO_DECODE_ERROR, message: 'decode failed' });
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(media.error?.code).toBe(MediaError.MEDIA_ERR_NETWORK);
+    });
+
+    it('reports a refused catalog, which playa announces after load resolves, as source not supported', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const onError = vi.fn();
+
+      media.addEventListener('error', onError);
+      media.source = SOURCE;
+      await flush();
+      emit('error', { severity: 'fatal', code: PlayerErrorCode.SUBSCRIPTION_REFUSED, message: 'catalog refused' });
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(media.error?.code).toBe(MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED);
+    });
+
+    it('keeps a catalog subscription that failed to send, which playa announces before it rejects the load', async () => {
+      const emit = stubPlaya();
+      const media = setup();
+      const onError = vi.fn();
+
+      vi.spyOn(Player.prototype, 'load').mockImplementation(async () => {
+        emit('error', { severity: 'fatal', code: PlayerErrorCode.LOAD_FAILED, message: 'catalog not sent' });
+        throw new Error('catalog not sent');
+      });
+      media.addEventListener('error', onError);
+      media.source = SOURCE;
+      await flush();
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
+        data: { playaErrorCode: PlayerErrorCode.LOAD_FAILED },
+      });
+    });
+
+    it('fails an unsupported browser before building a Player', async () => {
+      const media = setup();
+      const loadstart = vi.fn();
+      const onError = vi.fn();
+
+      const support = { ...Player.checkSupport(), supported: false, reason: 'No decoder available' };
+
+      vi.spyOn(Player, 'checkSupport').mockReturnValue(support);
+      media.addEventListener('loadstart', loadstart);
+      media.addEventListener('error', onError);
+      media.source = SOURCE;
+      await flush();
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
+        fatal: true,
+        message: MediaError.defaultMessages[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+        data: { support },
+      });
+      expect(loadstart).not.toHaveBeenCalled();
+      expect(media.engine).toBeNull();
     });
   });
 
