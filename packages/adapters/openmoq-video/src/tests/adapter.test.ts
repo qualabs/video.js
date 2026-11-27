@@ -232,7 +232,7 @@ describe('OpenMoqAdapter', () => {
         fatal: true,
         message: MediaError.defaultMessages[MediaError.MEDIA_ERR_NETWORK],
       });
-      expect(media.error?.data).toBeInstanceOf(Error);
+      expect(media.error?.data).toEqual({ cause: expect.any(Error) });
     });
 
     it('clears for a new source and reports its failure again', async () => {
@@ -368,7 +368,7 @@ describe('OpenMoqAdapter', () => {
         code: MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
         fatal: true,
         message: MediaError.defaultMessages[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
-        data: support,
+        data: { support },
       });
       expect(loadstart).not.toHaveBeenCalled();
       expect(media.engine).toBeNull();

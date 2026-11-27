@@ -213,7 +213,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
       const error = new MediaError(undefined, MediaError.MEDIA_ERR_NETWORK, true);
 
-      error.data = cause;
+      error.data = { cause };
       this.#fail(error);
     });
   }
@@ -238,7 +238,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     if (!support.supported) {
       const error = new MediaError(undefined, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED, true);
 
-      error.data = support;
+      error.data = { support };
       this.#fail(error);
       return;
     }
