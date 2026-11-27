@@ -186,9 +186,10 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
 
       if (__DEV__) console.warn('[openmoq-video] Failed to load the source.', cause);
 
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const error = new MediaError(undefined, MediaError.MEDIA_ERR_NETWORK, true);
 
-      this.#fail(new MediaError(message, MediaError.MEDIA_ERR_NETWORK, true));
+      error.data = cause;
+      this.#fail(error);
     });
   }
 
@@ -251,7 +252,7 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     if (this.#error) return;
 
     this.#error = error;
-    this.dispatchEvent(new Event('error'));
+    this.dispatchEvent(new ErrorEvent('error', { error, message: error.message }));
   }
 
   #onReady(player: Player, video: HTMLVideoElement, canvas: HTMLCanvasElement): void {

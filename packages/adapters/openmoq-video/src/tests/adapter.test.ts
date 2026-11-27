@@ -184,7 +184,7 @@ describe('OpenMoqAdapter', () => {
   });
 
   describe('error', () => {
-    it('reports a failed load as a fatal network error', async () => {
+    it('reports a failed load as a fatal network error with its default message', async () => {
       const media = setup();
       const onError = vi.fn();
 
@@ -193,7 +193,12 @@ describe('OpenMoqAdapter', () => {
       await flush();
 
       expect(onError).toHaveBeenCalledOnce();
-      expect(media.error).toMatchObject({ code: MediaError.MEDIA_ERR_NETWORK, fatal: true });
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_NETWORK,
+        fatal: true,
+        message: MediaError.defaultMessages[MediaError.MEDIA_ERR_NETWORK],
+      });
+      expect(media.error?.data).toBeInstanceOf(Error);
     });
 
     it('clears for a new source and reports its failure again', async () => {
