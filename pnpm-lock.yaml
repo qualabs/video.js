@@ -730,6 +730,9 @@ importers:
       '@openmoq/playa':
         specifier: 0.7.0
         version: 0.7.0
+      '@openmoq/player':
+        specifier: 0.7.0
+        version: 0.7.0
       '@videojs/media':
         specifier: workspace:*
         version: link:../../media

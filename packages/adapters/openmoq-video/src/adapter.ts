@@ -1,4 +1,5 @@
 import { type Level, Player, type PlayerOptions, type PlayerState } from '@openmoq/playa';
+import { PlayerErrorCode } from '@openmoq/player';
 import {
   MediaError,
   MediaReadyState,
@@ -8,6 +9,30 @@ import {
   type Video,
 } from '@videojs/media';
 import { noop } from '@videojs/utils/function';
+
+const playaErrorCodeToMediaErrorCode = new Map<number, number>([
+  [PlayerErrorCode.CONTROL_STREAM_LOST, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.DATA_STREAM_RESET, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.DATAGRAM_DECODE_ERROR, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.CONNECTION_LOST, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.REQUEST_UPDATE_FAILED, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.MEDIA_STARVED, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.VIDEO_DECODE_ERROR, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.AUDIO_DECODE_ERROR, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.MEDIA_ELEMENT_WEDGED, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.MEDIA_GAP_UNRECOVERABLE, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.CODEC_UNSUPPORTED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CATALOG_PARSE_ERROR, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CATALOG_DELTA_ERROR, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CMAF_INIT_INVALID, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.CMAF_INIT_TIMEOUT, MediaError.MEDIA_ERR_DECODE],
+  [PlayerErrorCode.CATALOG_WAIT_TIMEOUT, MediaError.MEDIA_ERR_NETWORK],
+  [PlayerErrorCode.SEEK_FAILED, MediaError.MEDIA_ERR_CUSTOM],
+  [PlayerErrorCode.LOAD_FAILED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.SUBSCRIPTION_REFUSED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.ALL_TRACKS_REFUSED, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+  [PlayerErrorCode.SELECTION_FAILED, MediaError.MEDIA_ERR_CUSTOM],
+]);
 
 /**
  * Connection fields for one broadcast, passed to the playa `Player` as-is.
@@ -290,9 +315,11 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
   #onError(severity: 'fatal' | 'recoverable', code: number, message: string): void {
     if (severity !== 'fatal') return;
 
-    const error = new MediaError(message, MediaError.MEDIA_ERR_CUSTOM, true);
+    const mediaErrorCode = playaErrorCodeToMediaErrorCode.get(code) ?? MediaError.MEDIA_ERR_CUSTOM;
+    const useCanonicalMessage = mediaErrorCode !== MediaError.MEDIA_ERR_CUSTOM;
+    const error = new MediaError(useCanonicalMessage ? undefined : message, mediaErrorCode, true);
 
-    error.data = { playaErrorCode: code };
+    error.data = { playaErrorCode: code, message };
     this.#fail(error);
   }
 
