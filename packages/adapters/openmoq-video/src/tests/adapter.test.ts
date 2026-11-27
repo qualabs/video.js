@@ -3,6 +3,7 @@ import { PlayerErrorCode } from '@openmoq/player';
 import { MediaError } from '@videojs/media';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
+import enginePackageJson from '../../node_modules/@openmoq/player/package.json' with { type: 'json' };
 import { OpenMoqAdapter, type OpenMoqSource } from '../index';
 
 const SOURCE: OpenMoqSource = { url: 'https://relay.example.com/moq', namespace: 'live' };
@@ -118,6 +119,12 @@ function flush(): Promise<void> {
 }
 
 describe('OpenMoqAdapter', () => {
+  describe('engine', () => {
+    it('is a playa built on the installed @openmoq/player, whose error codes the adapter maps', () => {
+      expect(Player.version).toBe(enginePackageJson.version);
+    });
+  });
+
   describe('attach', () => {
     it('builds no Player for a video without a sibling canvas', async () => {
       const container = document.createElement('div');
