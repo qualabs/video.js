@@ -233,6 +233,11 @@ export class OpenMoqAdapter extends EventTarget implements Partial<Video> {
     const canvas = this.#canvas;
     if (generation !== this.#generation || !source?.url || !source.namespace || !video || !canvas) return;
 
+    if (!Player.isSupported()) {
+      this.#fail(new MediaError(undefined, MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED, true));
+      return;
+    }
+
     const player = new Player(null, { ...source, video, canvas });
 
     this.#player = player;

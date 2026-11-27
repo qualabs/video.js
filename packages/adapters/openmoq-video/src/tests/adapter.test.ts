@@ -1,7 +1,7 @@
 import { Player, type PlayerEventMap } from '@openmoq/playa';
 import { PlayerErrorCode } from '@openmoq/player';
 import { MediaError } from '@videojs/media';
-import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { OpenMoqAdapter, type OpenMoqSource } from '../index';
 
@@ -42,6 +42,11 @@ const PLAYA_ERRORS = Object.entries(PlayerErrorCode).map(([name, playaErrorCode]
   playaErrorCode,
   code: MEDIA_ERROR_CODE_BY_PLAYA_ERROR_CODE.get(playaErrorCode),
 }));
+
+// jsdom has neither `VideoDecoder` nor `MediaSource`, so playa reports itself unsupported.
+beforeEach(() => {
+  vi.spyOn(Player, 'isSupported').mockReturnValue(true);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -343,6 +348,27 @@ describe('OpenMoqAdapter', () => {
 
       expect(onError).toHaveBeenCalledOnce();
       expect(media.error?.code).toBe(MediaError.MEDIA_ERR_NETWORK);
+    });
+
+    it('fails an unsupported browser before building a Player', async () => {
+      const media = setup();
+      const loadstart = vi.fn();
+      const onError = vi.fn();
+
+      vi.spyOn(Player, 'isSupported').mockReturnValue(false);
+      media.addEventListener('loadstart', loadstart);
+      media.addEventListener('error', onError);
+      media.source = SOURCE;
+      await flush();
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(media.error).toMatchObject({
+        code: MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
+        fatal: true,
+        message: MediaError.defaultMessages[MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED],
+      });
+      expect(loadstart).not.toHaveBeenCalled();
+      expect(media.engine).toBeNull();
     });
   });
 
